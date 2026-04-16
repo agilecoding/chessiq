@@ -36,26 +36,25 @@ const TTL_POSITION = 60 * 60 * 24 * 7; // 7 days  — position analysis is deter
 const TTL_CHAT     = 60 * 60;           // 1 hour  — chat is conversational, less cacheable
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
+// Use * so any origin (GitHub Pages, local file, custom domain) can call this.
+// Security comes from the GROQ_API_KEY being server-side, not from CORS restrictions.
 
-function corsHeaders(env) {
-  const origin = env?.ALLOWED_ORIGIN || '*';
-  return {
-    'Access-Control-Allow-Origin':  origin,
-    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Max-Age':       '86400',
-  };
-}
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin':  '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Max-Age':       '86400',
+};
 
-function jsonResponse(data, status = 200, env = null) {
+function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders(env) },
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
   });
 }
 
-function corsPreflightResponse(env) {
-  return new Response(null, { status: 204, headers: corsHeaders(env) });
+function corsPreflightResponse() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
 // ─── Crypto hash (for cache keys) ────────────────────────────────────────────
@@ -155,25 +154,32 @@ async function callGroq(env, messages, maxTokens = 500) {
 
 /**
  * /explain-move
- * Input tokens: ~80   (vs ~400 for full context)
- * Output tokens: max 400
+ * Includes player name, move number, eval swing.
+ * Input tokens: ~100  Output tokens: max 400
  */
-function buildExplainMoveMessages({ fen, san, side, classification, evalBefore, evalAfter, bestMove }) {
+function buildExplainMoveMessages({ fen, san, side, playerName, moveNumber, classification, evalBefore, evalAfter, bestMove }) {
   const swing   = Math.abs(((evalAfter ?? 0) - (evalBefore ?? 0)) / 100).toFixed(2);
   const evalNow = evalAfter != null
     ? (evalAfter > 0 ? `+${(evalAfter / 100).toFixed(2)}` : `${(evalAfter / 100).toFixed(2)}`)
     : '?';
 
-  const system = `You are a chess coach. Explain this move in 3–5 sentences: \
-why it's a ${classification}, what the idea should have been, and what concept was missed. \
-Be specific and educational. Mention the piece/square when relevant.`;
+  // Always be explicit: "White (Magnus)" not just "White"
+  const actor = playerName && playerName !== side
+    ? `${side} (${playerName})`
+    : (side ?? 'the player');
+
+  const system =
+    `You are a chess coach. Explain this move clearly in 3–5 sentences: ` +
+    `why it is a ${classification}, what the correct idea was, and what chess concept was missed. ` +
+    `Be specific — name the pieces and squares involved. ` +
+    `IMPORTANT: ${side} is the player who just moved. Do not confuse the two sides.`;
 
   const user =
     `FEN: ${fen}\n` +
-    `${side ?? 'Player'} played ${san} — rated as ${classification}.\n` +
-    `Eval swing: ${swing} pawns → now ${evalNow}.` +
-    (bestMove ? `\nEngine best: ${bestMove}.` : '') +
-    `\n\nExplain why this is a ${classification} and what was better.`;
+    `Move ${moveNumber ?? '?'}: ${actor} played ${san} — classified as ${classification}.\n` +
+    `Evaluation swing: ${swing} pawns | Position now: ${evalNow}.` +
+    (bestMove ? `\nEngine's best move was: ${bestMove}.` : '') +
+    `\n\nWhy is ${san} a ${classification}, and what should have been played instead?`;
 
   return [
     { role: 'system', content: system },
@@ -183,21 +189,31 @@ Be specific and educational. Mention the piece/square when relevant.`;
 
 /**
  * /analyze-position
- * Input tokens: ~60
- * Output tokens: max 350
+ * Input tokens: ~80  Output tokens: max 350
  */
-function buildAnalyzePositionMessages({ fen, eval: ev, turn, moveNumber, phase }) {
-  const who    = turn === 'b' ? 'Black' : 'White';
+function buildAnalyzePositionMessages({ fen, eval: ev, turn, moveNumber, whiteName, blackName }) {
+  // turn is from FEN: 'w' = White to move next, 'b' = Black to move next
+  const toMove = turn === 'b'
+    ? `Black${blackName && blackName !== 'Black' ? ` (${blackName})` : ''}`
+    : `White${whiteName && whiteName !== 'White' ? ` (${whiteName})` : ''}`;
+
   const evalStr = ev != null
-    ? (ev > 0 ? `White +${(ev / 100).toFixed(2)}` : ev < 0 ? `Black +${(Math.abs(ev) / 100).toFixed(2)}` : 'Equal (0.00)')
+    ? (ev > 0
+        ? `White${whiteName && whiteName !== 'White' ? ` (${whiteName})` : ''} is better by +${(ev / 100).toFixed(2)}`
+        : ev < 0
+          ? `Black${blackName && blackName !== 'Black' ? ` (${blackName})` : ''} is better by +${(Math.abs(ev) / 100).toFixed(2)}`
+          : 'Equal (0.00)')
     : 'unknown';
 
-  const system = `You are a chess coach. Analyze this position in 4–6 sentences: \
-key imbalances, immediate threats, plans for both sides. Be concrete — name pieces and squares.`;
+  const system =
+    `You are a chess coach. ` +
+    `White is ${whiteName ?? 'White'}, Black is ${blackName ?? 'Black'}. ` +
+    `Analyze this position in 4–6 sentences: key imbalances, immediate threats, plans for both sides. ` +
+    `Be concrete — name the pieces and squares.`;
 
   const user =
     `FEN: ${fen}\n` +
-    `${who} to move | Move ${moveNumber ?? '?'}${phase ? ` | ${phase}` : ''} | Eval: ${evalStr}\n\n` +
+    `${toMove} to move | Move ${moveNumber ?? '?'} | Eval: ${evalStr}\n\n` +
     `What are the key ideas and plans for both sides?`;
 
   return [
@@ -208,38 +224,51 @@ key imbalances, immediate threats, plans for both sides. Be concrete — name pi
 
 /**
  * /chat-with-coach
- * System prompt: compressed to ~150 tokens (vs 400+ from full buildGameContext)
- * History:       last 6 turns max (3 exchanges)
+ * System prompt with explicit color assignments + proper PGN.
+ * History: last 6 turns max (3 exchanges)
  * Output tokens: max 600
  */
-function buildChatMessages({ fen, pgnSummary, headers, currentMove, evalScore, accuracy, blunders, mistakes, history, message }) {
+function buildChatMessages({ fen, pgn, whiteName, blackName, headers, currentMove, evalScore, accuracy, blunders, mistakes, history, message }) {
   const evalStr = evalScore != null
-    ? (evalScore > 0 ? `+${(evalScore / 100).toFixed(2)}` : `${(evalScore / 100).toFixed(2)}`)
+    ? (evalScore > 0
+        ? `+${(evalScore / 100).toFixed(2)} (White better)`
+        : evalScore < 0
+          ? `${(evalScore / 100).toFixed(2)} (Black better)`
+          : '0.00 (equal)')
     : 'unknown';
 
-  const gameTag = headers
-    ? `${headers.White ?? '?'} vs ${headers.Black ?? '?'}` +
-      (headers.Event  ? ` — ${headers.Event}`  : '') +
-      (headers.Result ? ` (${headers.Result})` : '')
-    : 'Chess game';
+  // Derive names from whichever field is present
+  const wName = whiteName ?? headers?.White ?? 'White';
+  const bName = blackName ?? headers?.Black ?? 'Black';
 
+  const eventTag = headers?.Event ? ` | ${headers.Event}` : '';
+  const resultTag = headers?.Result ? ` | Result: ${headers.Result}` : '';
+
+  // Current move with full attribution — this is the most important context line
   const moveTag = currentMove
-    ? `Current: ${currentMove.san}${currentMove.classification ? ` [${currentMove.classification}]` : ''}`
+    ? `Move ${currentMove.moveNumber ?? '?'}: ${currentMove.side ?? ''} ` +
+      `(${currentMove.playerName ?? (currentMove.side === 'White' ? wName : bName)}) ` +
+      `played ${currentMove.san}` +
+      (currentMove.classification && !['good','best','excellent','book'].includes(currentMove.classification)
+        ? ` [${currentMove.classification}]` : '') +
+      (currentMove.bestMove ? ` | Engine best: ${currentMove.bestMove}` : '')
     : '';
 
   const statsTag = accuracy
-    ? `Acc W${accuracy.white?.toFixed(0) ?? '?'}% B${accuracy.black?.toFixed(0) ?? '?'}%` +
-      ` | ❌ ${blunders ?? 0} blunders ${mistakes ?? 0} mistakes`
+    ? `${wName}: ${accuracy.white?.toFixed(0) ?? '?'}% accuracy | ` +
+      `${bName}: ${accuracy.black?.toFixed(0) ?? '?'}% accuracy | ` +
+      `${blunders ?? 0} blunders, ${mistakes ?? 0} mistakes total`
     : '';
 
-  // Compressed system context
   const systemParts = [
     'You are ChessIQ, an expert chess coach. Be conversational, specific, and insightful.',
-    `Game: ${gameTag}`,
-    `FEN: ${fen ?? 'starting position'} | Eval: ${evalStr}`,
+    // Color assignment is on its own line so it cannot be missed
+    `White: ${wName} | Black: ${bName}${eventTag}${resultTag}`,
+    `Current position FEN: ${fen ?? 'starting position'} | Eval: ${evalStr}`,
     moveTag  || null,
     statsTag || null,
-    pgnSummary ? `Key moves: ${pgnSummary}` : null,
+    // Full PGN with move numbers so White/Black attribution is unambiguous
+    pgn ? `Game moves: ${pgn}` : null,
   ].filter(Boolean);
 
   const system = systemParts.join('\n');
@@ -259,13 +288,13 @@ function buildChatMessages({ fen, pgnSummary, headers, currentMove, evalScore, a
 async function handleExplainMove(request, env) {
   const body = await request.json().catch(() => null);
   if (!body?.fen || !body?.san) {
-    return jsonResponse({ error: 'Missing required fields: fen, san' }, 400, env);
+    return jsonResponse({ error: 'Missing required fields: fen, san' }, 400);
   }
 
   // Cache key covers FEN + move + best move so variations get their own entry
   const cacheKey = await sha256(`explain|${body.fen}|${body.san}|${body.bestMove ?? ''}`);
   const cached   = await cacheGet(env, cacheKey);
-  if (cached) return jsonResponse({ ...cached, cached: true }, 200, env);
+  if (cached) return jsonResponse({ ...cached, cached: true }, 200);
 
   const messages    = buildExplainMoveMessages(body);
   const { text, inputTokens, outputTokens } = await callGroq(env, messages, 400);
@@ -278,18 +307,18 @@ async function handleExplainMove(request, env) {
   };
 
   await cacheSet(env, cacheKey, result, TTL_MOVE);
-  return jsonResponse(result, 200, env);
+  return jsonResponse(result, 200);
 }
 
 async function handleAnalyzePosition(request, env) {
   const body = await request.json().catch(() => null);
   if (!body?.fen) {
-    return jsonResponse({ error: 'Missing required field: fen' }, 400, env);
+    return jsonResponse({ error: 'Missing required field: fen' }, 400);
   }
 
   const cacheKey = await sha256(`position|${body.fen}|${Math.round((body.eval ?? 0) / 10)}`);
   const cached   = await cacheGet(env, cacheKey);
-  if (cached) return jsonResponse({ ...cached, cached: true }, 200, env);
+  if (cached) return jsonResponse({ ...cached, cached: true }, 200);
 
   const messages = buildAnalyzePositionMessages(body);
   const { text, inputTokens, outputTokens } = await callGroq(env, messages, 350);
@@ -301,20 +330,20 @@ async function handleAnalyzePosition(request, env) {
   };
 
   await cacheSet(env, cacheKey, result, TTL_POSITION);
-  return jsonResponse(result, 200, env);
+  return jsonResponse(result, 200);
 }
 
 async function handleChatWithCoach(request, env) {
   const body = await request.json().catch(() => null);
   if (!body?.message) {
-    return jsonResponse({ error: 'Missing required field: message' }, 400, env);
+    return jsonResponse({ error: 'Missing required field: message' }, 400);
   }
 
   // Only cache first question about a position (no prior history = deterministic)
   const hasHistory   = body.history && body.history.length > 0;
   const cacheKey     = hasHistory ? null : await sha256(`chat|${body.fen ?? ''}|${body.message}`);
   const cached       = cacheKey ? await cacheGet(env, cacheKey) : null;
-  if (cached) return jsonResponse({ ...cached, cached: true }, 200, env);
+  if (cached) return jsonResponse({ ...cached, cached: true }, 200);
 
   const messages = buildChatMessages(body);
   const { text, inputTokens, outputTokens } = await callGroq(env, messages, 600);
@@ -325,7 +354,7 @@ async function handleChatWithCoach(request, env) {
   };
 
   if (cacheKey) await cacheSet(env, cacheKey, result, TTL_CHAT);
-  return jsonResponse(result, 200, env);
+  return jsonResponse(result, 200);
 }
 
 // ─── Main entry ───────────────────────────────────────────────────────────────
@@ -333,23 +362,23 @@ async function handleChatWithCoach(request, env) {
 export default {
   async fetch(request, env, ctx) {
     // CORS preflight
-    if (request.method === 'OPTIONS') return corsPreflightResponse(env);
+    if (request.method === 'OPTIONS') return corsPreflightResponse();
 
     const { pathname } = new URL(request.url);
 
     // Health check (no auth, no rate limit)
     if (pathname === '/health') {
-      return jsonResponse({ status: 'ok', timestamp: Date.now(), model: GROQ_MODEL }, 200, env);
+      return jsonResponse({ status: 'ok', timestamp: Date.now(), model: GROQ_MODEL }, 200);
     }
 
     // All other routes need POST
     if (request.method !== 'POST') {
-      return jsonResponse({ error: 'Method not allowed' }, 405, env);
+      return jsonResponse({ error: 'Method not allowed' }, 405);
     }
 
     // Guard: API key must be configured
     if (!env.GROQ_API_KEY) {
-      return jsonResponse({ error: 'Worker misconfigured: GROQ_API_KEY not set' }, 500, env);
+      return jsonResponse({ error: 'Worker misconfigured: GROQ_API_KEY not set' }, 500);
     }
 
     // Rate limit
@@ -361,7 +390,7 @@ export default {
         JSON.stringify({ error: 'Rate limit exceeded — please wait a moment.' }),
         {
           status:  429,
-          headers: { 'Content-Type': 'application/json', 'Retry-After': '1', ...corsHeaders(env) },
+          headers: { 'Content-Type': 'application/json', 'Retry-After': '1', ...CORS_HEADERS },
         }
       );
     }
@@ -372,12 +401,12 @@ export default {
         case '/explain-move':      return await handleExplainMove(request, env);
         case '/analyze-position':  return await handleAnalyzePosition(request, env);
         case '/chat-with-coach':   return await handleChatWithCoach(request, env);
-        default:                   return jsonResponse({ error: `Unknown endpoint: ${pathname}` }, 404, env);
+        default:                   return jsonResponse({ error: `Unknown endpoint: ${pathname}` }, 404);
       }
     } catch (err) {
       const status = err.status === 429 ? 503 : 500; // surface Groq 429 as 503 (backend busy)
       console.error(`[ChessIQ Worker] ${pathname}: ${err.message}`);
-      return jsonResponse({ error: err.message || 'Internal server error' }, status, env);
+      return jsonResponse({ error: err.message || 'Internal server error' }, status);
     }
   },
 };
