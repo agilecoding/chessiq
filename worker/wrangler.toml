@@ -1,0 +1,24 @@
+name            = "chessiq-worker"
+main            = "src/index.js"
+compatibility_date = "2024-09-01"
+
+# ── KV Namespace ─────────────────────────────────────────────────────────────
+# Run: wrangler kv:namespace create CHESSIQ_KV
+# Then paste the returned `id` below.
+[[kv_namespaces]]
+binding = "CHESSIQ_KV"
+id      = "5e75e9a2100c4f0ba0af5ffa391b8d04"
+
+# ── Secrets (set via CLI — never commit these) ────────────────────────────────
+# wrangler secret put GROQ_API_KEY        ← your Groq key (required)
+# wrangler secret put ALLOWED_ORIGIN      ← your app URL, e.g. https://you.github.io
+
+# ── Public vars ───────────────────────────────────────────────────────────────
+[vars]
+# ALLOWED_ORIGIN is also read from here as fallback (use * for dev)
+ALLOWED_ORIGIN = "*"
+
+# ── Routes (optional — set after deploying to a custom domain) ────────────────
+# [[routes]]
+# pattern = "api.chessiq.com/*"
+# zone_name = "chessiq.com"

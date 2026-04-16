@@ -1,0 +1,15 @@
+{
+  "name": "chessiq-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker backend for ChessIQ — rate limiting, KV caching, Groq AI proxy",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "kv:create": "wrangler kv:namespace create CHESSIQ_KV"
+  },
+  "devDependencies": {
+    "wrangler": "^4.83.0"
+  }
+}
