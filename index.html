@@ -264,18 +264,6 @@ header .spacer{flex:1;}
   font-family:'JetBrains Mono',monospace;
   font-size:.75rem;color:var(--muted);
 }
-.coach-title{font-weight:700;font-size:.85rem;flex:1;}
-.coach-icon{
-  display:inline-flex;align-items:center;justify-content:center;
-  width:26px;height:26px;border-radius:6px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-}
-.coach-icon svg{width:15px;height:15px;fill:#fff;}
-.api-badge{
-  display:none;font-size:.6rem;padding:2px 6px;border-radius:10px;
-  border:1px solid var(--green);color:var(--green);cursor:pointer;
-}
-.api-badge.connected{display:inline-block;}
 
 /* Board wrapper */
 .board-wrap{
@@ -399,10 +387,11 @@ header .spacer{flex:1;}
 }
 .coach-icon svg{width:15px;height:15px;fill:#fff;}
 .api-badge{
-  display:none;font-size:.6rem;padding:2px 6px;border-radius:10px;
-  border:1px solid var(--green);color:var(--green);cursor:pointer;
+  display:inline-block;font-size:.6rem;padding:2px 6px;border-radius:10px;
+  border:1px solid var(--muted);color:var(--muted);cursor:pointer;opacity:0.7;
 }
-.api-badge.connected{display:inline-block;}
+.api-badge.connected{border-color:var(--green);color:var(--green);opacity:1;}
+.api-badge.error{border-color:#f87171;color:#f87171;opacity:1;}
 
 /* Chat messages */
 .chat-messages{
@@ -785,7 +774,7 @@ input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
           <p style="margin-top:8px;font-size:.8em;color:var(--muted)"><em>"Why did I blunder here?"</em> · <em>"What's the plan?"</em> · <em>"Explain this endgame"</em></p>
           <div style="margin-top:10px;padding:9px 10px;background:#12142a;border-radius:8px;border:1px solid var(--border)">
             <p style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:6px">🤖 Connect an AI for conversational explanations</p>
-            <p style="font-size:.72rem;color:var(--muted);line-height:1.6">◆ <strong style="color:var(--purple)">Claude API</strong> — get a key at <strong>console.anthropic.com</strong> (recommended)<br>🦙 <strong style="color:var(--cyan)">Ollama</strong> — free &amp; local, install from <strong>ollama.com</strong> then run <code style="font-size:.67rem">ollama serve</code></p>
+            <p style="font-size:.72rem;color:var(--muted);line-height:1.6">☁️ <strong style="color:var(--cyan)">Worker</strong> (recommended) — zero config, API key stays server-side<br>⚡ <strong style="color:var(--orange)">Groq</strong> or <strong style="color:var(--text)">OpenAI</strong> — bring your own key (HTTPS only)</p>
             <p style="font-size:.72rem;color:var(--muted);margin-top:5px">Click <strong style="color:var(--text)">⚙️ Settings</strong> (top right) to configure.</p>
           </div>
         </div>
@@ -869,7 +858,7 @@ input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
         <span class="s-label">AI Provider</span>
         <span class="s-desc" id="providerDesc">Choose how the Chess Coach generates explanations.</span>
         <div id="corsNotice" style="display:none;margin-bottom:8px;padding:8px 10px;background:#1a1230;border:1px solid #3d2060;border-radius:7px;font-size:.72rem;color:#c4b5fd;line-height:1.5">
-          ⚠️ Running as a local file — Groq &amp; OpenAI need HTTPS. Use <strong>Worker</strong>, <strong>Claude</strong>, or <strong>Ollama</strong> here.
+          ⚠️ Running as a local file — Groq &amp; OpenAI need HTTPS. Use <strong>Worker</strong> here.
         </div>
         <div class="provider-grid" id="providerGrid" style="grid-template-columns:1fr 1fr 1fr;">
           <label class="provider-card active" data-provider="worker" style="border-color:var(--accent);background:#23204a;">
@@ -879,26 +868,12 @@ input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
             <span class="provider-name">Worker</span>
             <span class="provider-tag" style="background:#1a2a1a;color:var(--green)">Recommended</span>
           </label>
-          <label class="provider-card" data-provider="ollama">
-            <input type="radio" name="aiProvider" value="ollama">
-            <div class="provider-check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>
-            <span class="provider-icon">🦙</span>
-            <span class="provider-name">Ollama</span>
-            <span class="provider-tag local">Local · Free</span>
-          </label>
           <label class="provider-card" data-provider="groq">
             <input type="radio" name="aiProvider" value="groq">
             <div class="provider-check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>
             <span class="provider-icon">⚡</span>
             <span class="provider-name">Groq</span>
             <span class="provider-tag free">Free tier</span>
-          </label>
-          <label class="provider-card" data-provider="claude">
-            <input type="radio" name="aiProvider" value="claude">
-            <div class="provider-check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>
-            <span class="provider-icon">◆</span>
-            <span class="provider-name">Claude</span>
-            <span class="provider-tag paid">API Key</span>
           </label>
           <label class="provider-card" data-provider="openai">
             <input type="radio" name="aiProvider" value="openai">
@@ -920,12 +895,6 @@ input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
         <span class="s-label" id="apiKeyLabel">API Key</span>
         <span class="s-desc" id="apiKeyDesc">Enter your API key for the selected provider.</span>
         <input type="password" class="s-input" id="apiKeyInput" placeholder="…">
-      </div>
-      <!-- Ollama row -->
-      <div class="s-row" id="ollamaRow" style="display:none">
-        <span class="s-label">Ollama Model</span>
-        <span class="s-desc">Install from <strong>ollama.com</strong>, then run <code style="font-family:monospace;color:var(--cyan)">ollama pull llama3.2 &amp;&amp; ollama serve</code> in your terminal.</span>
-        <input type="text" class="s-input" id="ollamaModelInput" placeholder="llama3.2" value="llama3.2">
       </div>
     </div>
     <div class="modal-actions">
@@ -1117,7 +1086,7 @@ const S={
   flipped:false,positions:[],moves:[],analysis:[],
   posIndex:0,isAnalyzing:false,autoPlayTimer:null,
   boardSize:420,pgn:'',headers:{},
-  apiKey:'',aiProvider:'worker',ollamaModel:'llama3.2',workerUrl:'',
+  apiKey:'',aiProvider:'worker',workerUrl:'',
   chatHistory:[],evalChart:null,analyzer:null,
 };
 
@@ -1570,7 +1539,6 @@ async function analyzeGame(){
     document.getElementById('progressPct').textContent=pct+'%';
     if(i===S.posIndex)updateEvalBar(S.analysis[i].score);
   }
-}
 
   // Classify moves
   for(let i=0;i<S.moves.length;i++){
@@ -1607,7 +1575,7 @@ async function analyzeGame(){
       msg+=`• Move ${num} (${side}): \`${m.san}\` – ${m._class} (${cpToDisplay(m._evalBefore)} → ${cpToDisplay(m._evalAfter)})\n`;
     });
   }
-  addChatAnalysis(msg,keyBlunders[0]);
+  addChatMsg('assistant',msg);
 }
 
 function computeAccuracy(parity){
@@ -1803,18 +1771,6 @@ function addChatMsg(role,content){
   S.chatHistory.push({role,content});
 }
 
-function addChatAnalysis(msg,highlightMove){
-  const wrap=document.getElementById('chatMessages');
-  const div=document.createElement('div');
-  div.className='chat-msg assistant';
-  const card=document.createElement('div');
-  card.className='chat-analysis-card';
-  let html=msg.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`(.+?)`/g,'<code>$1</code>').replace(/\n/g,'<br>');
-  card.innerHTML=html;
-  div.appendChild(card);
-  wrap.appendChild(div);
-  wrap.scrollTop=wrap.scrollHeight;
-}
 
 function showTyping(){
   const wrap=document.getElementById('chatMessages');
@@ -1833,31 +1789,7 @@ async function sendChat(text){
   showTyping();
   document.getElementById('chatSendBtn').disabled=true;
   try{
-    let resp;
-    if(S.aiProvider==='ollama'){
-      // Try Ollama; if it fails, show a setup prompt instead of silently falling back
-      try{
-        resp=await callLLM(text);
-      }catch(ollamaErr){
-        // Ollama not running — get local data-based answer then append setup CTA
-        const localResp=await localResponse(text);
-        hideTyping();
-        addChatMsg('assistant',localResp);
-        // Show a separate setup nudge card
-        const httpsNote=window.location.protocol==='https:'
-          ?`- ⚡ **Groq** — free account at [groq.com](https://groq.com), uses Llama 3.1\n- ◆ **Claude API** — key at [console.anthropic.com](https://console.anthropic.com)\n- ⬡ **OpenAI** — key at [platform.openai.com](https://platform.openai.com)`
-          :`- ◆ **Claude API** — key at [console.anthropic.com](https://console.anthropic.com) · works instantly\n- 🦙 **Ollama** — install from [ollama.com](https://ollama.com), run \`ollama serve\`\n- 🌐 **Deploy online** — Groq/OpenAI unlock automatically on HTTPS`;
-        addChatMsg('assistant',
-          `⚠️ **Ollama isn't running** — the answer above is from ChessIQ's built-in engine, not a conversational AI.\n\n` +
-          `**To get real AI explanations:**\n${httpsNote}\n\n` +
-          `_Click **⚙️ Settings** to configure._`
-        );
-        document.getElementById('chatSendBtn').disabled=false;
-        return;
-      }
-    }else{
-      resp=await callLLM(text);
-    }
+    const resp=await callLLM(text);
     hideTyping();addChatMsg('assistant',resp);
   }catch(e){
     hideTyping();
@@ -1865,15 +1797,13 @@ async function sendChat(text){
     const providerHints={
       groq: isHttps
         ?'Check your Groq API key at **[console.groq.com](https://console.groq.com)**'
-        :'Groq requires HTTPS. Deploy the app online, or use **Claude API** / **Ollama** in ⚙️ Settings.',
+        :'Groq requires HTTPS. Deploy the app online, or switch to **☁️ Worker** in ⚙️ Settings.',
       openai: isHttps
         ?'Check your OpenAI API key at **[platform.openai.com](https://platform.openai.com)**'
-        :'OpenAI requires HTTPS. Deploy the app online, or use **Claude API** / **Ollama** in ⚙️ Settings.',
-      claude:'Get a key at **[console.anthropic.com](https://console.anthropic.com)**',
-      ollama:'Install from **[ollama.com](https://ollama.com)**, then run `ollama pull llama3.2 && ollama serve`',
+        :'OpenAI requires HTTPS. Deploy the app online, or switch to **☁️ Worker** in ⚙️ Settings.',
       worker:'Check your Worker URL in ⚙️ Settings. Make sure the worker is deployed and the URL is correct.'
     };
-    const hint=providerHints[S.aiProvider]||'Check your settings';
+    const hint=providerHints[S.aiProvider]||'Open ⚙️ Settings to configure an AI provider.';
     addChatMsg('assistant',`❌ **${e.message}**\n\n${hint}`);
   }
   document.getElementById('chatSendBtn').disabled=false;
@@ -1894,40 +1824,65 @@ async function fetchWithRetry(url, opts, maxRetries=3){
   throw new Error('Too many requests — please wait a moment and try again.');
 }
 
-// Build compressed game context for worker (much smaller than buildGameContext)
+// Build game context for worker — accurate color labels, proper PGN, move attribution
 function buildWorkerContext(){
   const h=S.headers;
   const mv=S.posIndex>0?S.moves[S.posIndex-1]:null;
   const a=S.analysis[S.posIndex];
   const fen=S.positions[S.posIndex]||S.positions[0];
 
-  // Accuracy summary
-  const analyzed=S.analysis.filter(x=>x!==null);
+  // Who is who — always explicit
+  const whiteName=h.White||'White';
+  const blackName=h.Black||'Black';
+
+  // Who played the current move: even move index = White, odd = Black
+  const moveIdx=S.posIndex-1;
+  const currentSide=mv?(moveIdx%2===0?'White':'Black'):null;
+  const currentPlayerName=currentSide==='White'?whiteName:blackName;
+  const currentMoveNumber=mv?Math.floor(moveIdx/2)+1:null;
+
+  // Proper PGN with move numbers up to current position (max 50 half-moves)
+  // Format: "1.e4 e5 2.Nf3 Nc6[blunder] 3.Bb5"
+  const movesSlice=S.moves.slice(0,Math.min(S.posIndex,50));
+  const pgnParts=[];
+  for(let i=0;i<movesSlice.length;i+=2){
+    const num=Math.floor(i/2)+1;
+    const tag=m=>m._class&&!['good','best','excellent','book'].includes(m._class)?`[${m._class}]`:'';
+    const wSan=movesSlice[i].san+tag(movesSlice[i]);
+    const bSan=movesSlice[i+1]?movesSlice[i+1].san+tag(movesSlice[i+1]):null;
+    pgnParts.push(`${num}.${wSan}${bSan?' '+bSan:''}`);
+  }
+  const pgn=pgnParts.join(' ');
+
+  // Accuracy + error counts
   let accuracy=null,blunders=0,mistakes=0;
-  if(analyzed.length>1){
+  if(S.analysis.some(x=>x!==null)){
     let wAcc=0,bAcc=0,wN=0,bN=0;
     S.moves.forEach((m,i)=>{
-      if(!m._accuracy)return;
-      if(i%2===0){wAcc+=m._accuracy;wN++;}else{bAcc+=m._accuracy;bN++;}
+      if(m._accuracy!=null){if(i%2===0){wAcc+=m._accuracy;wN++;}else{bAcc+=m._accuracy;bN++;}}
       if(m._class==='blunder')blunders++;
       if(m._class==='mistake')mistakes++;
     });
     if(wN>0||bN>0)accuracy={white:wN?wAcc/wN:null,black:bN?bAcc/bN:null};
   }
 
-  // PGN summary: only blunders/mistakes + surrounding moves (max 20 moves)
-  const keyMoves=S.moves.filter(m=>['blunder','mistake','inaccuracy'].includes(m._class));
-  const pgnSummary=keyMoves.length
-    ?keyMoves.map(m=>`${m.san}[${m._class}]`).join(' ')
-    :S.moves.slice(0,10).map(m=>m.san).join(' ');
-
   return{
     fen,
-    headers:{White:h.White,Black:h.Black,Event:h.Event,Result:h.Result},
-    currentMove:mv?{san:mv.san,classification:mv._class,evalBefore:mv._evalBefore,evalAfter:mv._evalAfter,bestMove:mv._bestMove}:null,
+    whiteName, blackName,
+    headers:{White:whiteName,Black:blackName,Event:h.Event,Result:h.Result},
+    currentMove:mv?{
+      san:mv.san,
+      side:currentSide,            // 'White' or 'Black'
+      playerName:currentPlayerName, // actual player name
+      moveNumber:currentMoveNumber,
+      classification:mv._class,
+      evalBefore:mv._evalBefore,
+      evalAfter:mv._evalAfter,
+      bestMove:mv._bestMove,
+    }:null,
     evalScore:a?.score??null,
     accuracy,blunders,mistakes,
-    pgnSummary,
+    pgn, // "1.e4 e5 2.Nf3 Nc6[blunder]" — move numbers included
   };
 }
 
@@ -1950,7 +1905,9 @@ async function callWorker(userMsg){
     payload={
       fen:ctx.fen,
       san:mv.san,
-      side:S.posIndex%2===1?'White':'Black',
+      side:mv.side,               // 'White' or 'Black' — from buildWorkerContext
+      playerName:mv.playerName,   // actual player name
+      moveNumber:mv.moveNumber,
       classification:mv.classification,
       evalBefore:mv.evalBefore,
       evalAfter:mv.evalAfter,
@@ -1961,8 +1918,10 @@ async function callWorker(userMsg){
     payload={
       fen:ctx.fen,
       eval:ctx.evalScore,
-      turn:ctx.fen?.split(' ')[1]==='w'?'w':'b',
+      turn:ctx.fen?.split(' ')[1]||'w',
       moveNumber:Math.ceil(S.posIndex/2)+1,
+      whiteName:ctx.whiteName,
+      blackName:ctx.blackName,
     };
   }else{
     endpoint='/chat-with-coach';
@@ -2001,24 +1960,9 @@ async function callLLM(userMsg){
     S.chatHistory.push({role:'assistant',content:reply});
     return reply;
 
-  // ── Ollama (local, no key required) ──────────────────────────────────────
-  }else if(S.aiProvider==='ollama'){
-    const r=await fetch('http://localhost:11434/v1/chat/completions',{
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({
-        model:S.ollamaModel||'llama3.2',
-        messages:[{role:'system',content:sysCtx},...messages],
-        stream:false
-      })
-    }).catch(()=>{throw new Error('Ollama not reachable. Make sure it\'s running: ollama serve');});
-    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`Ollama error ${r.status}`);}
-    const d=await r.json();
-    reply=d.choices[0].message.content;
-
   // ── Groq (free tier, OpenAI-compatible) ──────────────────────────────────
   }else if(S.aiProvider==='groq'){
-    if(!S.apiKey)throw new Error('Groq API key not set. Add it in Settings.');
+    if(!S.apiKey)throw new Error('Groq API key not set. Add it in ⚙️ Settings.');
     const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{
       method:'POST',
       headers:{'content-type':'application/json','authorization':`Bearer ${S.apiKey}`},
@@ -2034,7 +1978,7 @@ async function callLLM(userMsg){
 
   // ── OpenAI ────────────────────────────────────────────────────────────────
   }else if(S.aiProvider==='openai'){
-    if(!S.apiKey)throw new Error('OpenAI API key not set. Add it in Settings.');
+    if(!S.apiKey)throw new Error('OpenAI API key not set. Add it in ⚙️ Settings.');
     const r=await fetch('https://api.openai.com/v1/chat/completions',{
       method:'POST',
       headers:{'content-type':'application/json','authorization':`Bearer ${S.apiKey}`},
@@ -2048,27 +1992,8 @@ async function callLLM(userMsg){
     const d=await r.json();
     reply=d.choices[0].message.content;
 
-  // ── Claude (Anthropic) ────────────────────────────────────────────────────
   }else{
-    if(!S.apiKey)throw new Error('Claude API key not set. Add it in Settings.');
-    const r=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'x-api-key':S.apiKey,
-        'anthropic-version':'2023-06-01',
-        'content-type':'application/json',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
-      body:JSON.stringify({
-        model:'claude-3-5-haiku-20241022',
-        max_tokens:1024,
-        system:sysCtx,
-        messages
-      })
-    });
-    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`Claude error ${r.status}`);}
-    const d=await r.json();
-    reply=d.content[0].text;
+    throw new Error('No AI provider configured. Open ⚙️ Settings to set one up.');
   }
 
   S.chatHistory.push({role:'user',content:userMsg});
@@ -2076,130 +2001,6 @@ async function callLLM(userMsg){
   return reply;
 }
 
-async function localResponse(userText){
-  await new Promise(r=>setTimeout(r,250+Math.random()*200));
-  const q=userText.toLowerCase();
-  const mv=S.posIndex>0?S.moves[S.posIndex-1]:null;
-  const a=S.analysis[S.posIndex];
-  const analyzed=S.analysis.some(x=>x!==null);
-  const h=S.headers;
-
-  // ── No game loaded ───────────────────────────────────────────────────────
-  if(!S.pgn){
-    return`📥 No game loaded yet. Click **Upload PGN** or **Load Sample** to get started.\n\n_${S.aiProvider==='ollama'?'Ollama is active — once a game is loaded I can answer any chess question freely.':'Configure your AI provider in ⚙️ Settings for AI-powered answers.'}_`;
-  }
-
-  // ── Blunder / mistake explanation ────────────────────────────────────────
-  if(q.match(/why|explain|bad|wrong|blunder|mistake|inaccuracy/)){
-    if(!analyzed)return`⚙️ Click **Analyze** first so I can calculate the engine evaluation for each move.`;
-    if(!mv)return`🎯 Click on a specific move in the move list to navigate to it, then ask again.`;
-    const cls=mv._class;
-    if(!cls||['best','excellent','good','book'].includes(cls))
-      return`✅ **${mv.san}** was a **${cls||'good'}** move — nothing wrong here! Navigate to a blunder or mistake and ask again.`;
-    const side=S.moves.indexOf(mv)%2===0?'White':'Black';
-    const drop=(mv._evalAfter-mv._evalBefore)/100;
-    const dropStr=Math.abs(drop).toFixed(2);
-    let r=`**${mv.san}** is a **${cls}** by ${side}.\n\nEvaluation swung **${dropStr} pawns** against ${side}: ${cpToDisplay(mv._evalBefore)} → ${cpToDisplay(mv._evalAfter)}.`;
-    if(mv._bestMove)r+=`\n\n🏆 **Better move:** \`${mv._bestMove}\` — keeps a stronger position.`;
-    if(cls==='blunder')r+=`\n\n**Why it hurts:** A blunder-sized swing (>2.5 pawns) typically means hanging a piece, missing a tactic, or walking into a mating threat.`;
-    else if(cls==='mistake')r+=`\n\n**Why it hurts:** A mistake (1–2.5 pawn swing) often comes from ignoring the opponent's threats or making an overly passive/optimistic choice.`;
-    else r+=`\n\n**Why it's inaccurate:** A small imprecision — maybe a better square for the piece, or a more forcing continuation was available.`;
-    r+=`\n\n_Configure an AI provider in ⚙️ Settings (Ollama is free and local) for a deeper, position-specific explanation._`;
-    return r;
-  }
-
-  // ── Best move / continuation ─────────────────────────────────────────────
-  if(q.match(/best|continue|continuation|engine|suggest|recommend/)){
-    if(!analyzed)return`⚙️ Click **Analyze** first.`;
-    const src=a;
-    if(!src)return`Navigate to a position to see the engine suggestion.`;
-    if(!src.bestMove)return`**Eval: ${cpToDisplay(src.score)}** — no best move found for this position.`;
-    let r=`🏆 **Engine's best move: \`${src.bestMove}\`**\n\nEvaluation: **${cpToDisplay(src.score)}**`;
-    if(src.pv&&src.pv.length>1)r+=`\n\nEngine line: \`${src.pv.slice(0,6).join(' ')}\``;
-    r+=`\n\n_For a full explanation of why this is best, configure an AI provider in ⚙️ Settings._`;
-    return r;
-  }
-
-  // ── Position / plan / strategy ───────────────────────────────────────────
-  if(q.match(/plan|strateg|position|idea|structure|what (should|do)|how (should|do)/)){
-    if(!a)return`Navigate to a position after loading and analyzing a game.`;
-    const pawns=a.score/100;
-    const eval_str=cpToDisplay(a.score);
-    if(Math.abs(pawns)<0.3){
-      return`🎯 **Roughly equal** (${eval_str}).\n\n**For both sides:**\n- Improve piece activity and coordination\n- Control key central squares\n- Look for pawn breaks to open the position\n- Avoid unnecessary weaknesses\n\n_Configure an AI provider in ⚙️ Settings for position-specific strategic advice._`;
-    }
-    const ahead=pawns>0?'White':'Black',behind=pawns>0?'Black':'White';
-    return`🎯 **${ahead} is better** (${eval_str}).\n\n**${ahead}** should: activate all pieces, simplify toward a winning endgame, avoid unnecessary complications.\n\n**${behind}** should: create counterplay, look for tactical shots, avoid passive moves, and try to unbalance the position.\n\n_Configure an AI provider in ⚙️ Settings for a deeper plan specific to this position._`;
-  }
-
-  // ── Game report / summary ────────────────────────────────────────────────
-  if(q.match(/summary|report|overall|accuracy|how (did|was)|game (review|analysis)/)){
-    if(!analyzed)return`📊 Click **Analyze** first to generate a full game report.`;
-    const wAcc=computeAccuracy(0),bAcc=computeAccuracy(1);
-    const cats=['blunder','mistake','inaccuracy'];
-    let r=`📊 **Game Report — ${h.White||'White'} vs ${h.Black||'Black'}**\n\n`;
-    r+=`| | White | Black |\n|---|---|---|\n`;
-    r+=`| Accuracy | ${wAcc}% | ${bAcc}% |\n`;
-    cats.forEach(cat=>{
-      const wn=S.moves.filter((m,i)=>i%2===0&&m._class===cat).length;
-      const bn=S.moves.filter((m,i)=>i%2===1&&m._class===cat).length;
-      r+=`| ${cat.charAt(0).toUpperCase()+cat.slice(1)}s | ${wn} | ${bn} |\n`;
-    });
-    const wBl=S.moves.filter((m,i)=>i%2===0&&m._class==='blunder').map(m=>m.san);
-    const bBl=S.moves.filter((m,i)=>i%2===1&&m._class==='blunder').map(m=>m.san);
-    if(wBl.length)r+=`\n⚡ **White blunders:** ${wBl.map(s=>`\`${s}\``).join(', ')}`;
-    if(bBl.length)r+=`\n⚡ **Black blunders:** ${bBl.map(s=>`\`${s}\``).join(', ')}`;
-    r+=`\n\n_Click any move, then ask "Why blunder?" for details. Configure an AI provider in ⚙️ Settings for a narrative game review._`;
-    return r;
-  }
-
-  // ── Mistakes list ────────────────────────────────────────────────────────
-  if(q.match(/mistake|blunder|error|miss|inaccurac/)){
-    if(!analyzed)return`⚙️ Click **Analyze** first.`;
-    const byClass={blunder:[],mistake:[],inaccuracy:[]};
-    S.moves.forEach((m,i)=>{if(byClass[m._class])byClass[m._class].push(`\`${m.san}\` (${i%2===0?'W':'B'} move ${Math.floor(i/2)+1})`);});
-    let r=``;
-    if(byClass.blunder.length)r+=`💥 **Blunders:** ${byClass.blunder.join(', ')}\n`;
-    if(byClass.mistake.length)r+=`⚠️ **Mistakes:** ${byClass.mistake.join(', ')}\n`;
-    if(byClass.inaccuracy.length)r+=`🔸 **Inaccuracies:** ${byClass.inaccuracy.join(', ')}\n`;
-    if(!r)r=`✅ No significant errors found — clean game!`;
-    r+=`\nClick a move in the list, then ask "Why blunder?" for a full explanation.`;
-    return r;
-  }
-
-  // ── Opening ──────────────────────────────────────────────────────────────
-  if(q.match(/opening|debut|gambit|defense|sicilian|french|caro|ruy|italian|english/)){
-    const opening=h.Opening||'Unknown';
-    const firstMoves=S.moves.slice(0,8).map(m=>m.san).join(' ');
-    return`📖 **Opening played:** ${opening}\n\n**First moves:** \`${firstMoves}\`\n\nFor detailed opening theory, move-by-move ideas, and typical plans for both sides, configure an AI provider in ⚙️ Settings (Ollama is free and local) — I can then give you a grandmaster-level opening breakdown!`;
-  }
-
-  // ── Improvement ──────────────────────────────────────────────────────────
-  if(q.match(/improve|better|learn|train|study|weak|strength|tip/)){
-    if(!analyzed)return`⚙️ Analyze the game first so I can identify specific improvement areas.`;
-    const wAcc=computeAccuracy(0),bAcc=computeAccuracy(1);
-    const wBl=S.moves.filter((m,i)=>i%2===0&&m._class==='blunder').length;
-    const bBl=S.moves.filter((m,i)=>i%2===1&&m._class==='blunder').length;
-    let r=`🎓 **Improvement areas from this game:**\n\n`;
-    if(wBl>1)r+=`- **White:** Focus on calculation and avoiding tactical oversights (${wBl} blunders)\n`;
-    if(bBl>1)r+=`- **Black:** Focus on calculation and avoiding tactical oversights (${bBl} blunders)\n`;
-    if(wAcc<70||bAcc<70)r+=`- Both players should practice tactics puzzles daily to improve accuracy\n`;
-    r+=`- Review the blundered moves, understand the missed tactic or threat\n- Study endgames if the game went into a losing endgame\n\n_Configure an AI provider in ⚙️ Settings for personalized coaching based on your specific weaknesses._`;
-    return r;
-  }
-
-  // ── Fallback: still try to be helpful ───────────────────────────────────
-  const snippets=[];
-  if(mv)snippets.push(`You're viewing after **\`${mv.san}\`**${mv._class?` (${mv._class})`:''}. `);
-  if(a)snippets.push(`Current eval: **${cpToDisplay(a.score)}**. `);
-  if(analyzed){
-    const wAcc=computeAccuracy(0),bAcc=computeAccuracy(1);
-    snippets.push(`Game accuracy — White: ${wAcc}%, Black: ${bAcc}%.`);
-  }
-  let fallback=snippets.join('')||`Game loaded: **${h.White||'?'}** vs **${h.Black||'?'}** (${S.moves.length} moves).`;
-  fallback+=`\n\nI can answer questions about the current position, blunders, plans, and game statistics. For in-depth AI analysis, configure an AI provider in ⚙️ Settings — Ollama runs locally with no API key needed.`;
-  return fallback;
-}
 
 // ── Auto-play ──────────────────────────────────────────────────────────────────
 function toggleAutoPlay(){
@@ -2239,21 +2040,19 @@ function init(){
   // Ensure ctrl-bar stacks vertically (label row on top, buttons below)
   document.getElementById('ctrlBar').style.flexDirection='column';
 
-  // Init board — draw immediately with Unicode pieces, then re-draw once
-  // cburnett SVGs arrive from Lichess CDN (same assets as web-boardimage)
+  // Init board — draw immediately with Unicode fallback, re-draw once SVGs arrive
   S.positions=['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'];
   const canvas = document.getElementById('boardCanvas');
   canvas.width  = S.boardSize;
   canvas.height = S.boardSize;
-  renderBoard(S.positions[0]);       // instant draw (Unicode fallback)
-  loadPieces().then(() => renderBoard(S.positions[0]));  // re-draw with SVG pieces
+  renderBoard(S.positions[0]); // instant Unicode draw
 
   // Init eval chart
   initEvalChart();
 
-  // Badge starts neutral — user needs to save settings to confirm provider
+  // Badge starts neutral — CSS .api-badge already sets opacity:0.7
   const badge=document.getElementById('apiBadge');
-  badge.textContent='⚙️ Setup AI';badge.style.opacity='0.7';
+  badge.textContent='⚙️ Setup AI';
 
   // Modal tabs
   document.querySelectorAll('.modal-tab').forEach(btn=>{
@@ -2287,7 +2086,6 @@ function init(){
   });
   document.getElementById('settingsBtn').addEventListener('click',()=>{
     document.getElementById('apiKeyInput').value=S.apiKey;
-    document.getElementById('ollamaModelInput').value=S.ollamaModel||'llama3.2';
     document.getElementById('workerUrlInput').value=S.workerUrl||'';
     // Activate the right provider card
     document.querySelectorAll('.provider-card').forEach(c=>{
@@ -2340,19 +2138,15 @@ function init(){
 
   function updateProviderUI(provider){
     const keyRow=document.getElementById('apiKeyRow');
-    const ollamaRow=document.getElementById('ollamaRow');
     const workerRow=document.getElementById('workerRow');
     const label=document.getElementById('apiKeyLabel');
     const desc=document.getElementById('apiKeyDesc');
     const input=document.getElementById('apiKeyInput');
     // Hide all optional rows first
     keyRow.style.display='none';
-    ollamaRow.style.display='none';
     workerRow.style.display='none';
     if(provider==='worker'){
       workerRow.style.display='';
-    }else if(provider==='ollama'){
-      ollamaRow.style.display='';
     }else{
       keyRow.style.display='';
       if(provider==='groq'){
@@ -2363,10 +2157,6 @@ function init(){
         label.textContent='OpenAI API Key';
         desc.textContent='Uses gpt-4o-mini. Get a key at platform.openai.com. Works on HTTPS only.';
         input.placeholder='sk-…';
-      }else{
-        label.textContent='Claude API Key';
-        desc.textContent='Uses claude-3-5-haiku. Get a key at console.anthropic.com.';
-        input.placeholder='sk-ant-api03-…';
       }
     }
   }
@@ -2431,25 +2221,37 @@ function init(){
     const activeCard=document.querySelector('.provider-card.active');
     S.aiProvider=activeCard?activeCard.dataset.provider:'worker';
     S.apiKey=document.getElementById('apiKeyInput').value.trim();
-    S.ollamaModel=document.getElementById('ollamaModelInput').value.trim()||'llama3.2';
     S.workerUrl=document.getElementById('workerUrlInput').value.trim();
-    // Update badge
+    // Update badge — opacity controlled by CSS (.api-badge / .connected / .error)
     const badge=document.getElementById('apiBadge');
-    badge.style.opacity='1';
-    const providerLabels={worker:'☁️ Worker',ollama:'🦙 Ollama',groq:'⚡ Groq',openai:'⬡ OpenAI',claude:'◆ Claude'};
-    const isReady=(
-      S.aiProvider==='worker'?!!S.workerUrl:
-      S.aiProvider==='ollama'?true:
-      !!S.apiKey
-    );
+    const providerLabels={worker:'☁️ Worker',groq:'⚡ Groq',openai:'⬡ OpenAI'};
+    const isReady=(S.aiProvider==='worker'?!!S.workerUrl:!!S.apiKey);
     if(isReady){
-      badge.textContent=providerLabels[S.aiProvider]||'✓ AI';badge.classList.add('connected');
+      badge.textContent=providerLabels[S.aiProvider]||'✓ AI';
+      badge.classList.add('connected');badge.classList.remove('error');
     }else{
-      badge.classList.remove('connected');badge.textContent='⚙️ Setup AI';badge.style.opacity='0.7';
+      badge.classList.remove('connected','error');
+      badge.textContent='⚙️ Setup AI';
     }
     // Clear chat history when switching providers
     S.chatHistory=[];
     closeModal('settingsModal');
+    // Health-check the worker immediately after saving
+    if(S.aiProvider==='worker'&&S.workerUrl){
+      const base=S.workerUrl.replace(/\/$/,'');
+      fetch(`${base}/health`,{signal:AbortSignal.timeout(5000)})
+        .then(r=>r.ok?r.json():Promise.reject(r.status))
+        .then(d=>{
+          badge.textContent='☁️ Worker ✓';
+          badge.classList.add('connected');badge.classList.remove('error');
+          badge.title=`Worker connected — model: ${d.model||'?'}`;
+        })
+        .catch(()=>{
+          badge.textContent='☁️ Worker ✗';
+          badge.classList.remove('connected');badge.classList.add('error');
+          badge.title='Worker unreachable — check the URL and redeploy';
+        });
+    }
   });
   document.getElementById('apiBadge').addEventListener('click',()=>openModal('settingsModal'));
 
@@ -2465,13 +2267,12 @@ function init(){
     btn.addEventListener('click',()=>sendChat(btn.dataset.q));
   });
 
-  // Load Opera Game on boot — pieces may still be loading; re-draw after
+  // Load Opera Game on boot; fetch SVG pieces in parallel, re-draw when ready
   loadPGN(SAMPLES.opera);
-  loadPieces().then(() => goToPosition(S.posIndex));
+  loadPieces().then(() => renderBoard(S.positions[S.posIndex]));
 }
 
 document.addEventListener('DOMContentLoaded',init);
 </script>
 </body>
 </html>
-

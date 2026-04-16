@@ -10,12 +10,17 @@ binding = "CHESSIQ_KV"
 id      = "5e75e9a2100c4f0ba0af5ffa391b8d04"
 
 # ── Secrets (set via CLI — never commit these) ────────────────────────────────
-# wrangler secret put GROQ_API_KEY        ← your Groq key (required)
+# wrangler secret put GROQ_API_KEY        ← Groq key   (required unless LLM_PROVIDER=openai)
+# wrangler secret put OPENAI_API_KEY      ← OpenAI key (required if LLM_PROVIDER=openai or auto)
 # wrangler secret put ALLOWED_ORIGIN      ← your app URL, e.g. https://you.github.io
 
 # ── Public vars ───────────────────────────────────────────────────────────────
 [vars]
-# ALLOWED_ORIGIN is also read from here as fallback (use * for dev)
+# LLM_PROVIDER controls which backend is used:
+#   'groq'   — Groq only (default, fastest, free tier)
+#   'openai' — OpenAI only (GPT-4o-mini)
+#   'auto'   — Groq primary, auto-failover to OpenAI on 429/5xx
+LLM_PROVIDER   = "groq"
 ALLOWED_ORIGIN = "*"
 
 # ── Routes (optional — set after deploying to a custom domain) ────────────────
