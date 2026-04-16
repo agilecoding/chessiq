@@ -1539,7 +1539,6 @@ async function analyzeGame(){
     document.getElementById('progressPct').textContent=pct+'%';
     if(i===S.posIndex)updateEvalBar(S.analysis[i].score);
   }
-  }
 
   // Classify moves
   for(let i=0;i<S.moves.length;i++){
@@ -1826,7 +1825,6 @@ async function fetchWithRetry(url, opts, maxRetries=3){
 }
 
 // Build game context for worker — accurate color labels, proper PGN, move attribution
-// Build game context for worker — accurate color labels, proper PGN, move attribution
 function buildWorkerContext(){
   const h=S.headers;
   const mv=S.posIndex>0?S.moves[S.posIndex-1]:null;
@@ -1857,36 +1855,10 @@ function buildWorkerContext(){
   const pgn=pgnParts.join(' ');
 
   // Accuracy + error counts
-  // Who is who — always explicit
-  const whiteName=h.White||'White';
-  const blackName=h.Black||'Black';
-
-  // Who played the current move: even move index = White, odd = Black
-  const moveIdx=S.posIndex-1;
-  const currentSide=mv?(moveIdx%2===0?'White':'Black'):null;
-  const currentPlayerName=currentSide==='White'?whiteName:blackName;
-  const currentMoveNumber=mv?Math.floor(moveIdx/2)+1:null;
-
-  // Proper PGN with move numbers up to current position (max 50 half-moves)
-  // Format: "1.e4 e5 2.Nf3 Nc6[blunder] 3.Bb5"
-  const movesSlice=S.moves.slice(0,Math.min(S.posIndex,50));
-  const pgnParts=[];
-  for(let i=0;i<movesSlice.length;i+=2){
-    const num=Math.floor(i/2)+1;
-    const tag=m=>m._class&&!['good','best','excellent','book'].includes(m._class)?`[${m._class}]`:'';
-    const wSan=movesSlice[i].san+tag(movesSlice[i]);
-    const bSan=movesSlice[i+1]?movesSlice[i+1].san+tag(movesSlice[i+1]):null;
-    pgnParts.push(`${num}.${wSan}${bSan?' '+bSan:''}`);
-  }
-  const pgn=pgnParts.join(' ');
-
-  // Accuracy + error counts
   let accuracy=null,blunders=0,mistakes=0;
-  if(S.analysis.some(x=>x!==null)){
   if(S.analysis.some(x=>x!==null)){
     let wAcc=0,bAcc=0,wN=0,bN=0;
     S.moves.forEach((m,i)=>{
-      if(m._accuracy!=null){if(i%2===0){wAcc+=m._accuracy;wN++;}else{bAcc+=m._accuracy;bN++;}}
       if(m._accuracy!=null){if(i%2===0){wAcc+=m._accuracy;wN++;}else{bAcc+=m._accuracy;bN++;}}
       if(m._class==='blunder')blunders++;
       if(m._class==='mistake')mistakes++;
@@ -1908,21 +1880,8 @@ function buildWorkerContext(){
       evalAfter:mv._evalAfter,
       bestMove:mv._bestMove,
     }:null,
-    whiteName, blackName,
-    headers:{White:whiteName,Black:blackName,Event:h.Event,Result:h.Result},
-    currentMove:mv?{
-      san:mv.san,
-      side:currentSide,            // 'White' or 'Black'
-      playerName:currentPlayerName, // actual player name
-      moveNumber:currentMoveNumber,
-      classification:mv._class,
-      evalBefore:mv._evalBefore,
-      evalAfter:mv._evalAfter,
-      bestMove:mv._bestMove,
-    }:null,
     evalScore:a?.score??null,
     accuracy,blunders,mistakes,
-    pgn, // "1.e4 e5 2.Nf3 Nc6[blunder]" — move numbers included
     pgn, // "1.e4 e5 2.Nf3 Nc6[blunder]" — move numbers included
   };
 }
@@ -1949,9 +1908,6 @@ async function callWorker(userMsg){
       side:mv.side,               // 'White' or 'Black' — from buildWorkerContext
       playerName:mv.playerName,   // actual player name
       moveNumber:mv.moveNumber,
-      side:mv.side,               // 'White' or 'Black' — from buildWorkerContext
-      playerName:mv.playerName,   // actual player name
-      moveNumber:mv.moveNumber,
       classification:mv.classification,
       evalBefore:mv.evalBefore,
       evalAfter:mv.evalAfter,
@@ -1963,10 +1919,7 @@ async function callWorker(userMsg){
       fen:ctx.fen,
       eval:ctx.evalScore,
       turn:ctx.fen?.split(' ')[1]||'w',
-      turn:ctx.fen?.split(' ')[1]||'w',
       moveNumber:Math.ceil(S.posIndex/2)+1,
-      whiteName:ctx.whiteName,
-      blackName:ctx.blackName,
       whiteName:ctx.whiteName,
       blackName:ctx.blackName,
     };
