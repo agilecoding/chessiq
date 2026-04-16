@@ -264,18 +264,6 @@ header .spacer{flex:1;}
   font-family:'JetBrains Mono',monospace;
   font-size:.75rem;color:var(--muted);
 }
-.coach-title{font-weight:700;font-size:.85rem;flex:1;}
-.coach-icon{
-  display:inline-flex;align-items:center;justify-content:center;
-  width:26px;height:26px;border-radius:6px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-}
-.coach-icon svg{width:15px;height:15px;fill:#fff;}
-.api-badge{
-  display:none;font-size:.6rem;padding:2px 6px;border-radius:10px;
-  border:1px solid var(--green);color:var(--green);cursor:pointer;
-}
-.api-badge.connected{display:inline-block;}
 
 /* Board wrapper */
 .board-wrap{
@@ -1570,7 +1558,6 @@ async function analyzeGame(){
     document.getElementById('progressPct').textContent=pct+'%';
     if(i===S.posIndex)updateEvalBar(S.analysis[i].score);
   }
-}
 
   // Classify moves
   for(let i=0;i<S.moves.length;i++){
@@ -1894,40 +1881,65 @@ async function fetchWithRetry(url, opts, maxRetries=3){
   throw new Error('Too many requests — please wait a moment and try again.');
 }
 
-// Build compressed game context for worker (much smaller than buildGameContext)
+// Build game context for worker — accurate color labels, proper PGN, move attribution
 function buildWorkerContext(){
   const h=S.headers;
   const mv=S.posIndex>0?S.moves[S.posIndex-1]:null;
   const a=S.analysis[S.posIndex];
   const fen=S.positions[S.posIndex]||S.positions[0];
 
-  // Accuracy summary
-  const analyzed=S.analysis.filter(x=>x!==null);
+  // Who is who — always explicit
+  const whiteName=h.White||'White';
+  const blackName=h.Black||'Black';
+
+  // Who played the current move: even move index = White, odd = Black
+  const moveIdx=S.posIndex-1;
+  const currentSide=mv?(moveIdx%2===0?'White':'Black'):null;
+  const currentPlayerName=currentSide==='White'?whiteName:blackName;
+  const currentMoveNumber=mv?Math.floor(moveIdx/2)+1:null;
+
+  // Proper PGN with move numbers up to current position (max 50 half-moves)
+  // Format: "1.e4 e5 2.Nf3 Nc6[blunder] 3.Bb5"
+  const movesSlice=S.moves.slice(0,Math.min(S.posIndex,50));
+  const pgnParts=[];
+  for(let i=0;i<movesSlice.length;i+=2){
+    const num=Math.floor(i/2)+1;
+    const tag=m=>m._class&&!['good','best','excellent','book'].includes(m._class)?`[${m._class}]`:'';
+    const wSan=movesSlice[i].san+tag(movesSlice[i]);
+    const bSan=movesSlice[i+1]?movesSlice[i+1].san+tag(movesSlice[i+1]):null;
+    pgnParts.push(`${num}.${wSan}${bSan?' '+bSan:''}`);
+  }
+  const pgn=pgnParts.join(' ');
+
+  // Accuracy + error counts
   let accuracy=null,blunders=0,mistakes=0;
-  if(analyzed.length>1){
+  if(S.analysis.some(x=>x!==null)){
     let wAcc=0,bAcc=0,wN=0,bN=0;
     S.moves.forEach((m,i)=>{
-      if(!m._accuracy)return;
-      if(i%2===0){wAcc+=m._accuracy;wN++;}else{bAcc+=m._accuracy;bN++;}
+      if(m._accuracy!=null){if(i%2===0){wAcc+=m._accuracy;wN++;}else{bAcc+=m._accuracy;bN++;}}
       if(m._class==='blunder')blunders++;
       if(m._class==='mistake')mistakes++;
     });
     if(wN>0||bN>0)accuracy={white:wN?wAcc/wN:null,black:bN?bAcc/bN:null};
   }
 
-  // PGN summary: only blunders/mistakes + surrounding moves (max 20 moves)
-  const keyMoves=S.moves.filter(m=>['blunder','mistake','inaccuracy'].includes(m._class));
-  const pgnSummary=keyMoves.length
-    ?keyMoves.map(m=>`${m.san}[${m._class}]`).join(' ')
-    :S.moves.slice(0,10).map(m=>m.san).join(' ');
-
   return{
     fen,
-    headers:{White:h.White,Black:h.Black,Event:h.Event,Result:h.Result},
-    currentMove:mv?{san:mv.san,classification:mv._class,evalBefore:mv._evalBefore,evalAfter:mv._evalAfter,bestMove:mv._bestMove}:null,
+    whiteName, blackName,
+    headers:{White:whiteName,Black:blackName,Event:h.Event,Result:h.Result},
+    currentMove:mv?{
+      san:mv.san,
+      side:currentSide,            // 'White' or 'Black'
+      playerName:currentPlayerName, // actual player name
+      moveNumber:currentMoveNumber,
+      classification:mv._class,
+      evalBefore:mv._evalBefore,
+      evalAfter:mv._evalAfter,
+      bestMove:mv._bestMove,
+    }:null,
     evalScore:a?.score??null,
     accuracy,blunders,mistakes,
-    pgnSummary,
+    pgn, // "1.e4 e5 2.Nf3 Nc6[blunder]" — move numbers included
   };
 }
 
@@ -1950,7 +1962,9 @@ async function callWorker(userMsg){
     payload={
       fen:ctx.fen,
       san:mv.san,
-      side:S.posIndex%2===1?'White':'Black',
+      side:mv.side,               // 'White' or 'Black' — from buildWorkerContext
+      playerName:mv.playerName,   // actual player name
+      moveNumber:mv.moveNumber,
       classification:mv.classification,
       evalBefore:mv.evalBefore,
       evalAfter:mv.evalAfter,
@@ -1961,8 +1975,10 @@ async function callWorker(userMsg){
     payload={
       fen:ctx.fen,
       eval:ctx.evalScore,
-      turn:ctx.fen?.split(' ')[1]==='w'?'w':'b',
+      turn:ctx.fen?.split(' ')[1]||'w',
       moveNumber:Math.ceil(S.posIndex/2)+1,
+      whiteName:ctx.whiteName,
+      blackName:ctx.blackName,
     };
   }else{
     endpoint='/chat-with-coach';
@@ -2450,6 +2466,20 @@ function init(){
     // Clear chat history when switching providers
     S.chatHistory=[];
     closeModal('settingsModal');
+    // Health-check the worker immediately after saving
+    if(S.aiProvider==='worker'&&S.workerUrl){
+      const base=S.workerUrl.replace(/\/$/,'');
+      fetch(`${base}/health`,{signal:AbortSignal.timeout(5000)})
+        .then(r=>r.ok?r.json():Promise.reject(r.status))
+        .then(d=>{
+          badge.textContent='☁️ Worker ✓';badge.classList.add('connected');badge.title=`Model: ${d.model||'?'}`;
+        })
+        .catch(()=>{
+          badge.textContent='☁️ Worker ✗';badge.classList.remove('connected');
+          badge.title='Worker unreachable — check the URL';
+          badge.style.opacity='0.7';
+        });
+    }
   });
   document.getElementById('apiBadge').addEventListener('click',()=>openModal('settingsModal'));
 
