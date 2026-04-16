@@ -8,24 +8,34 @@
  *   GET  /health            → uptime check
  *
  * Features
- *   • Rate limiting  — KV-based sliding window (3 req/sec per IP)
+ *   • Multi-provider — Groq (Llama 3.1) and OpenAI (GPT-4o-mini), auto-failover
+ *   • Rate limiting  — KV-based sliding window (3 req/sec per IP, 20/sec global)
  *   • KV caching     — deterministic responses cached 7 days, chat 1 hr
  *   • Token budget   — compressed prompts reduce cost ~70%
  *   • Retry headers  — 429 includes Retry-After so client backs off cleanly
- *   • CORS           — locked to ALLOWED_ORIGINS, set * for dev
+ *   • CORS           — set * for dev, lock to origin in production
  *
  * Env vars (set via `wrangler secret put` or Workers dashboard)
- *   GROQ_API_KEY   — your Groq API key
+ *   GROQ_API_KEY   — Groq key (required unless LLM_PROVIDER=openai)
+ *   OPENAI_API_KEY — OpenAI key (optional; used as failover or primary)
+ *   LLM_PROVIDER   — 'groq' (default) | 'openai' | 'auto' (Groq with OpenAI failover)
  *   ALLOWED_ORIGIN — your deployed app URL (e.g. https://yourname.github.io)
  *
  * KV namespace
  *   CHESSIQ_KV     — bound in wrangler.toml
+ *
+ * Concurrency note
+ *   Cloudflare Workers handle concurrency natively — each request runs in its
+ *   own isolate. No queue is needed; the platform scales horizontally for free.
  */
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const GROQ_API   = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.1-8b-instant';  // fast, cheap, excellent quality
+const GROQ_API    = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL  = 'llama-3.1-8b-instant';   // fast, free tier, excellent quality
+
+const OPENAI_API   = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_MODEL = 'gpt-4o-mini';            // cheap, capable, HTTPS-friendly
 
 const RATE_WINDOW_SEC  = 1;   // sliding window size
 const RATE_LIMIT_PER_IP = 3;  // max requests per IP per window
@@ -117,37 +127,87 @@ async function cacheSet(env, key, value, ttl) {
   } catch { /* non-fatal */ }
 }
 
-// ─── Groq caller ─────────────────────────────────────────────────────────────
+// ─── LLM callers ─────────────────────────────────────────────────────────────
 
-async function callGroq(env, messages, maxTokens = 500) {
-  const res = await fetch(GROQ_API, {
+/**
+ * Call a single provider. Returns { text, inputTokens, outputTokens, provider }.
+ * Throws on error with err.status set for rate-limit detection.
+ */
+async function callProvider(apiUrl, apiKey, model, messages, maxTokens) {
+  const res = await fetch(apiUrl, {
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${env.GROQ_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model:      GROQ_MODEL,
+      model,
       messages,
-      max_tokens: maxTokens,
-      temperature: 0.65,  // slightly creative but factual
+      max_tokens:  maxTokens,
+      temperature: 0.65,   // slightly creative but factual
     }),
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    const msg = err?.error?.message || `Groq HTTP ${res.status}`;
-    // Surface Groq's rate limit upstream so the client can see it
+    const msg = err?.error?.message || `HTTP ${res.status} from ${apiUrl}`;
+    // Preserve status so callers can detect 429 vs 5xx
     if (res.status === 429) throw Object.assign(new Error(msg), { status: 429 });
+    if (res.status >= 500)  throw Object.assign(new Error(msg), { status: res.status });
     throw new Error(msg);
   }
 
   const data = await res.json();
   return {
-    text:       data.choices[0].message.content.trim(),
-    inputTokens:  data.usage?.prompt_tokens     ?? 0,
-    outputTokens: data.usage?.completion_tokens  ?? 0,
+    text:         data.choices[0].message.content.trim(),
+    inputTokens:  data.usage?.prompt_tokens    ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
   };
+}
+
+/**
+ * Route to the right provider based on env.LLM_PROVIDER:
+ *   'groq'   — Groq only (default)
+ *   'openai' — OpenAI only
+ *   'auto'   — try Groq first; if it returns 429 or 5xx, failover to OpenAI
+ *
+ * The active provider name is returned in the result so /health can report it.
+ */
+async function callLLM(env, messages, maxTokens = 500) {
+  const mode = (env.LLM_PROVIDER ?? 'groq').toLowerCase();
+
+  if (mode === 'openai') {
+    if (!env.OPENAI_API_KEY) throw new Error('Worker misconfigured: OPENAI_API_KEY not set');
+    const result = await callProvider(OPENAI_API, env.OPENAI_API_KEY, OPENAI_MODEL, messages, maxTokens);
+    return { ...result, provider: 'openai', model: OPENAI_MODEL };
+  }
+
+  if (mode === 'auto') {
+    // Try Groq first
+    if (env.GROQ_API_KEY) {
+      try {
+        const result = await callProvider(GROQ_API, env.GROQ_API_KEY, GROQ_MODEL, messages, maxTokens);
+        return { ...result, provider: 'groq', model: GROQ_MODEL };
+      } catch (err) {
+        // Failover to OpenAI on rate-limit or server error — not on bad requests
+        if ((err.status === 429 || err.status >= 500) && env.OPENAI_API_KEY) {
+          console.warn(`[ChessIQ] Groq ${err.status} — failing over to OpenAI`);
+          const result = await callProvider(OPENAI_API, env.OPENAI_API_KEY, OPENAI_MODEL, messages, maxTokens);
+          return { ...result, provider: 'openai-failover', model: OPENAI_MODEL };
+        }
+        throw err; // rethrow if no fallback available
+      }
+    }
+    // No Groq key — fall through to OpenAI directly
+    if (!env.OPENAI_API_KEY) throw new Error('Worker misconfigured: no API key set (GROQ_API_KEY or OPENAI_API_KEY required)');
+    const result = await callProvider(OPENAI_API, env.OPENAI_API_KEY, OPENAI_MODEL, messages, maxTokens);
+    return { ...result, provider: 'openai', model: OPENAI_MODEL };
+  }
+
+  // Default: 'groq'
+  if (!env.GROQ_API_KEY) throw new Error('Worker misconfigured: GROQ_API_KEY not set');
+  const result = await callProvider(GROQ_API, env.GROQ_API_KEY, GROQ_MODEL, messages, maxTokens);
+  return { ...result, provider: 'groq', model: GROQ_MODEL };
 }
 
 // ─── Token-optimised prompt builders ─────────────────────────────────────────
@@ -297,12 +357,13 @@ async function handleExplainMove(request, env) {
   if (cached) return jsonResponse({ ...cached, cached: true }, 200);
 
   const messages    = buildExplainMoveMessages(body);
-  const { text, inputTokens, outputTokens } = await callGroq(env, messages, 400);
+  const { text, inputTokens, outputTokens, provider } = await callLLM(env, messages, 400);
 
   const result = {
     explanation:    text,
     move:           body.san,
     classification: body.classification,
+    provider,
     tokens:         { in: inputTokens, out: outputTokens },
   };
 
@@ -321,11 +382,12 @@ async function handleAnalyzePosition(request, env) {
   if (cached) return jsonResponse({ ...cached, cached: true }, 200);
 
   const messages = buildAnalyzePositionMessages(body);
-  const { text, inputTokens, outputTokens } = await callGroq(env, messages, 350);
+  const { text, inputTokens, outputTokens, provider } = await callLLM(env, messages, 350);
 
   const result = {
     analysis: text,
     fen:      body.fen,
+    provider,
     tokens:   { in: inputTokens, out: outputTokens },
   };
 
@@ -346,10 +408,11 @@ async function handleChatWithCoach(request, env) {
   if (cached) return jsonResponse({ ...cached, cached: true }, 200);
 
   const messages = buildChatMessages(body);
-  const { text, inputTokens, outputTokens } = await callGroq(env, messages, 600);
+  const { text, inputTokens, outputTokens, provider } = await callLLM(env, messages, 600);
 
   const result = {
     reply:  text,
+    provider,
     tokens: { in: inputTokens, out: outputTokens },
   };
 
@@ -368,7 +431,20 @@ export default {
 
     // Health check (no auth, no rate limit)
     if (pathname === '/health') {
-      return jsonResponse({ status: 'ok', timestamp: Date.now(), model: GROQ_MODEL }, 200);
+      const mode     = (env.LLM_PROVIDER ?? 'groq').toLowerCase();
+      const hasGroq  = !!env.GROQ_API_KEY;
+      const hasOAI   = !!env.OPENAI_API_KEY;
+      const model    = mode === 'openai' ? OPENAI_MODEL
+                     : mode === 'auto'   ? (hasGroq ? `${GROQ_MODEL} (auto, OAI fallback: ${hasOAI})` : OPENAI_MODEL)
+                     : GROQ_MODEL;
+      return jsonResponse({
+        status:    'ok',
+        timestamp: Date.now(),
+        provider:  mode,
+        model,
+        groqKey:   hasGroq,
+        openaiKey: hasOAI,
+      }, 200);
     }
 
     // All other routes need POST
@@ -376,9 +452,9 @@ export default {
       return jsonResponse({ error: 'Method not allowed' }, 405);
     }
 
-    // Guard: API key must be configured
-    if (!env.GROQ_API_KEY) {
-      return jsonResponse({ error: 'Worker misconfigured: GROQ_API_KEY not set' }, 500);
+    // Guard: at least one API key must be configured
+    if (!env.GROQ_API_KEY && !env.OPENAI_API_KEY) {
+      return jsonResponse({ error: 'Worker misconfigured: set GROQ_API_KEY or OPENAI_API_KEY' }, 500);
     }
 
     // Rate limit
