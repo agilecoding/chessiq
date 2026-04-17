@@ -1512,9 +1512,11 @@ function _mvScore(m){ // move ordering: captures > promotions > quiet
   if(m.promotion) s+=_PV[m.promotion];
   return s;
 }
+// _deadline: shared time-limit token for the current inline search
+let _deadline = 0;
 function _ab(chess,depth,alpha,beta,maxing){
   if(chess.game_over()) return chess.in_checkmate()?(maxing?-29000:29000):0;
-  if(depth===0) return _evalBoard(chess);
+  if(depth===0||performance.now()>_deadline) return _evalBoard(chess);
   const moves=chess.moves({verbose:true}).sort((a,b)=>_mvScore(b)-_mvScore(a));
   if(maxing){
     let v=-Infinity;
@@ -1532,20 +1534,29 @@ function _ab(chess,depth,alpha,beta,maxing){
     return v;
   }
 }
+// Iterative-deepening inline search, time-limited to ~150 ms per position
 function _inlineAnalyze(fen, depth){
   const chess=new Chess(fen);
   if(chess.game_over()) return {score:_evalBoard(chess),bestMove:null,pv:[]};
   const white=chess.turn()==='w';
-  const moves=chess.moves({verbose:true}).sort((a,b)=>_mvScore(b)-_mvScore(a));
-  let best=white?-Infinity:Infinity, bestMove=null;
-  for(const m of moves){
-    chess.move(m);
-    const score=_ab(chess, Math.max(1,depth-1), -Infinity, Infinity, !white);
-    chess.undo();
-    if(white?score>best:score<best){ best=score; bestMove=m; }
+  let bestMove=null, bestScore=white?-Infinity:Infinity;
+  // Run depth 1..maxDepth, stopping early if time runs out
+  _deadline = performance.now() + 150; // 150 ms budget per position
+  for(let d=1; d<=depth; d++){
+    if(performance.now()>_deadline) break;
+    const moves=chess.moves({verbose:true}).sort((a,b)=>_mvScore(b)-_mvScore(a));
+    let best=white?-Infinity:Infinity, bm=null;
+    for(const m of moves){
+      if(performance.now()>_deadline) break;
+      chess.move(m);
+      const score=_ab(chess, Math.max(0,d-1), -Infinity, Infinity, !white);
+      chess.undo();
+      if(white?score>best:score<best){ best=score; bm=m; }
+    }
+    if(bm){ bestMove=bm; bestScore=best; }
   }
   const uci=bestMove?bestMove.from+bestMove.to+(bestMove.promotion||''):null;
-  return {score:white?best:-best, bestMove:uci, pv:uci?[uci]:[]};
+  return {score:white?bestScore:-bestScore, bestMove:uci, pv:uci?[uci]:[]};
 }
 
 // ── StockfishAnalyzer: Worker → inline fallback ───────────────────────────────
@@ -1563,20 +1574,28 @@ class StockfishAnalyzer {
 
   async init() {
     // Probe stockfish.online with a quick test position (startpos, depth 1)
+    // Use Promise.race for timeout — AbortSignal cannot be cloned in some environments
+    const _fetchWithTimeout = (url, ms) => Promise.race([
+      fetch(url),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+    ]);
     try {
       const testFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
       const url = `${SF_API}?fen=${encodeURIComponent(testFen)}&depth=1`;
-      const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const res  = await _fetchWithTimeout(url, 8000);
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if(data.success){
+      if(data && data.success){
         this._online = true;
         this._inline = false;
         this.ready   = true;
+        console.log('[ChessIQ] stockfish.online reachable ✅');
         return;
       }
       throw new Error('API returned success:false');
-    } catch(_) {
-      // stockfish.online unreachable — fall back to inline engine
+    } catch(err) {
+      // stockfish.online unreachable (CSP, network, offline) — fall back to inline engine
+      console.warn('[ChessIQ] stockfish.online probe failed:', err.message, '— using inline engine');
       this._online = false;
       this._inline = true;
       this.ready   = true;
@@ -1588,9 +1607,9 @@ class StockfishAnalyzer {
 
     // ── Inline fallback (offline / API down) ──────────────────────────────────
     if(this._inline){
-      return new Promise(resolve => setTimeout(()=>{
-        resolve(_inlineAnalyze(fen, Math.min(S.sfDepth, 5)));
-      }, 0));
+      // Yield to the browser (paint + input) before each blocking search
+      await new Promise(r => setTimeout(r, 0));
+      return _inlineAnalyze(fen, Math.min(S.sfDepth, 5));
     }
 
     // ── stockfish.online REST API (Stockfish 16 NNUE) ─────────────────────────
@@ -1599,7 +1618,10 @@ class StockfishAnalyzer {
     const url   = `${SF_API}?fen=${encodeURIComponent(fen)}&depth=${depth}`;
 
     try {
-      const res  = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      const res = await Promise.race([
+        fetch(url),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000))
+      ]);
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -1633,6 +1655,7 @@ class StockfishAnalyzer {
 
     } catch(err) {
       // Network error / timeout — fall through to inline engine for this position
+      await new Promise(r => setTimeout(r, 0));
       return _inlineAnalyze(fen, Math.min(S.sfDepth, 5));
     }
   }
@@ -2440,7 +2463,7 @@ function init(){
     // Health-check the worker immediately after saving
     if(S.aiProvider==='worker'&&S.workerUrl){
       const base=S.workerUrl.replace(/\/$/,'');
-      fetch(`${base}/health`,{signal:AbortSignal.timeout(5000)})
+      Promise.race([fetch(`${base}/health`),new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),5000))])
         .then(r=>r.ok?r.json():Promise.reject(r.status))
         .then(d=>{
           badge.textContent='☁️ Worker ✓';
