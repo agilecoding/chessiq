@@ -1128,7 +1128,8 @@ function renderBoard(fen, opts = {}) {
 }
 
 // ── Stockfish constants (must precede state) ─────────────────────────────────
-// SF_CDN removed — engine is now stockfish.online REST API (no local Worker needed)
+// Stockfish WASM Worker CDN (Lichess build — Stockfish 16 NNUE, runs in a Web Worker)
+const SF_CDN = 'https://cdn.jsdelivr.net/npm/stockfish.wasm@0.10.0/stockfish.js';
 
 const SF_DEPTH_PRESETS = [
   { depth:  1, elo:  600, label: 'Beginner',   tag: '~600'  },
@@ -1468,11 +1469,13 @@ function renderMoveList(){
 }
 
 // ── Chess Engine ──────────────────────────────────────────────────────────────
-// Two-tier strategy:
-//   1. stockfish.online REST API — Stockfish 16 NNUE, free, no auth required.
-//      Simple fetch() call, works everywhere, depth capped at 16 by the API.
-//   2. Inline alpha-beta fallback — activates when the API is unreachable
-//      (offline, network error). Same interface, depth capped at 5.
+// Three-tier strategy (each tier activates if the previous one fails):
+//   1. Stockfish WASM Web Worker (SF_CDN) — Stockfish 16 NNUE, full depth.
+//      Works on GitHub Pages and any HTTPS host that allows blob Workers.
+//   2. stockfish.online REST API — same engine via fetch(), depth ≤ 16.
+//      Fallback when Workers are blocked (CSP sandboxes, some browsers).
+//   3. Inline alpha-beta — pure-JS engine, depth ≤ 5, always works.
+//      Last resort for offline / fully sandboxed environments.
 
 // ── Inline fallback engine ────────────────────────────────────────────────────
 const _PV  = {p:100,n:320,b:330,r:500,q:900,k:0};
@@ -1565,113 +1568,199 @@ function _inlineAnalyze(fen, depth){
   return {score:white?bestScore:-bestScore, bestMove:uci, pv:uci?[uci]:[]};
 }
 
-// ── StockfishAnalyzer: Worker → inline fallback ───────────────────────────────
-// ── Stockfish REST API endpoint ───────────────────────────────────────────────
-// stockfish.online — free, no auth, max depth 16, NNUE-powered Stockfish 16
+// stockfish.online REST API — tier-2 fallback
 const SF_API = 'https://stockfish.online/api/s/v2.php';
+
+// Shared timeout-aware fetch helper (avoids AbortSignal cloning issues)
+const _fetchT = (url, ms) => Promise.race([
+  fetch(url),
+  new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+]);
 
 class StockfishAnalyzer {
   constructor() {
     this.ready    = false;
     this._stopped = false;
-    this._online  = false;  // true when stockfish.online is reachable
-    this._inline  = false;  // true when falling back to inline engine
+    this._worker  = null;   // Tier 1: WASM Web Worker
+    this._online  = false;  // Tier 2: stockfish.online REST API
+    this._inline  = false;  // Tier 3: inline alpha-beta
   }
 
+  // ── Init: try each tier in order ─────────────────────────────────────────
   async init() {
-    // Probe stockfish.online with a quick test position (startpos, depth 1)
-    // Use Promise.race for timeout — AbortSignal cannot be cloned in some environments
-    const _fetchWithTimeout = (url, ms) => Promise.race([
-      fetch(url),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
-    ]);
+    // Tier 1 — WASM Worker
+    try {
+      this._worker = await this._initWorker();
+      this.ready   = true;
+      console.log('[ChessIQ] Stockfish WASM Worker ready ✅');
+      return;
+    } catch(e) {
+      console.warn('[ChessIQ] WASM Worker failed:', e.message, '— trying stockfish.online');
+    }
+
+    // Tier 2 — stockfish.online REST API
     try {
       const testFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-      const url = `${SF_API}?fen=${encodeURIComponent(testFen)}&depth=1`;
-      const res  = await _fetchWithTimeout(url, 8000);
+      const res  = await _fetchT(`${SF_API}?fen=${encodeURIComponent(testFen)}&depth=1`, 8000);
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if(data && data.success){
-        this._online = true;
-        this._inline = false;
-        this.ready   = true;
-        console.log('[ChessIQ] stockfish.online reachable ✅');
-        return;
-      }
-      throw new Error('API returned success:false');
-    } catch(err) {
-      // stockfish.online unreachable (CSP, network, offline) — fall back to inline engine
-      console.warn('[ChessIQ] stockfish.online probe failed:', err.message, '— using inline engine');
-      this._online = false;
-      this._inline = true;
+      if(!data?.success) throw new Error('API returned success:false');
+      this._online = true;
       this.ready   = true;
+      console.log('[ChessIQ] stockfish.online reachable ✅');
+      return;
+    } catch(e) {
+      console.warn('[ChessIQ] stockfish.online failed:', e.message, '— using inline engine');
     }
+
+    // Tier 3 — inline alpha-beta (always works)
+    this._inline = true;
+    this.ready   = true;
+    console.log('[ChessIQ] Using inline engine (tier 3)');
   }
 
+  // ── Tier-1: boot the WASM Worker ─────────────────────────────────────────
+  _initWorker() {
+    return new Promise((resolve, reject) => {
+      // Fetch the engine source, embed in a blob so CSP origin restrictions
+      // don't apply (the blob: URL is same-origin by spec on HTTPS hosts).
+      _fetchT(SF_CDN, 20000)
+        .then(r => { if(!r.ok) throw new Error(`CDN ${r.status}`); return r.text(); })
+        .then(src => {
+          const blobUrl = URL.createObjectURL(new Blob([src], {type:'application/javascript'}));
+          const worker  = new Worker(blobUrl);
+          worker._blobUrl = blobUrl;
+
+          const t = setTimeout(() => {
+            worker.terminate();
+            URL.revokeObjectURL(blobUrl);
+            reject(new Error('Worker init timeout'));
+          }, 20000);
+
+          const onMsg = (e) => {
+            const line = (typeof e === 'string' ? e : e.data || '').trim();
+            if(line === 'uciok')   { worker.postMessage('isready'); }
+            if(line === 'readyok'){
+              clearTimeout(t);
+              worker.removeEventListener('message', onMsg);
+              worker.postMessage('setoption name Hash value 32');
+              worker.postMessage('ucinewgame');
+              resolve(worker);
+            }
+          };
+          worker.addEventListener('message', onMsg);
+          worker.onerror = (err) => {
+            clearTimeout(t);
+            URL.revokeObjectURL(blobUrl);
+            reject(new Error(err.message || 'Worker error'));
+          };
+          worker.postMessage('uci');
+        })
+        .catch(reject);
+    });
+  }
+
+  // ── Analyze a FEN — routes to whichever tier is active ───────────────────
   async analyze(fen) {
     if(this._stopped) return {score:0, bestMove:null, pv:[]};
 
-    // ── Inline fallback (offline / API down) ──────────────────────────────────
-    if(this._inline){
-      // Yield to the browser (paint + input) before each blocking search
-      await new Promise(r => setTimeout(r, 0));
-      return _inlineAnalyze(fen, Math.min(S.sfDepth, 5));
-    }
+    // Tier 1 — WASM Worker UCI
+    if(this._worker) return this._analyzeWorker(fen);
 
-    // ── stockfish.online REST API (Stockfish 16 NNUE) ─────────────────────────
-    // API max depth is 16; clamp user selection accordingly
+    // Tier 2 — stockfish.online REST
+    if(this._online)  return this._analyzeOnline(fen);
+
+    // Tier 3 — inline alpha-beta
+    await new Promise(r => setTimeout(r, 0)); // yield to browser paint
+    return _inlineAnalyze(fen, Math.min(S.sfDepth, 5));
+  }
+
+  _analyzeWorker(fen) {
+    return new Promise(resolve => {
+      let score = 0, bestMove = null, pv = [];
+      const isBlack = fen.split(' ')[1] === 'b';
+
+      let guard;
+      const handler = (e) => {
+        const line = (typeof e === 'string' ? e : e.data || '').trim();
+        if(!line) return;
+        const cpM = line.match(/\bscore cp (-?\d+)/);
+        const mtM = line.match(/\bscore mate (-?\d+)/);
+        const pvM = line.match(/\bpv (.+)/);
+        if(cpM) score = isBlack ? -parseInt(cpM[1],10) : parseInt(cpM[1],10);
+        if(mtM){ const m=parseInt(mtM[1],10); score=(m>0?30000:-30000)*(isBlack?-1:1); }
+        if(pvM) pv = pvM[1].trim().split(' ');
+        if(line.startsWith('bestmove')){
+          clearTimeout(guard);
+          this._worker.removeEventListener('message', handler);
+          const parts = line.split(' ');
+          bestMove = parts[1] !== '(none)' ? parts[1] : null;
+          resolve({score, bestMove, pv});
+        }
+      };
+      guard = setTimeout(() => {
+        this._worker.removeEventListener('message', handler);
+        resolve({score, bestMove, pv});
+      }, 15000);
+
+      this._worker.addEventListener('message', handler);
+      this._worker.postMessage(`position fen ${fen}`);
+      this._worker.postMessage(`go depth ${S.sfDepth}`);
+    });
+  }
+
+  async _analyzeOnline(fen) {
     const depth = Math.min(S.sfDepth, 16);
     const url   = `${SF_API}?fen=${encodeURIComponent(fen)}&depth=${depth}`;
-
     try {
-      const res = await Promise.race([
-        fetch(url),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000))
-      ]);
+      const res  = await _fetchT(url, 30000);
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if(!data?.success) throw new Error('API error');
 
-      if(!data.success) throw new Error('API error');
-
-      // evaluation is in pawns (e.g. 0.45); convert to centipawns
-      // Always white-relative from the API — negate for black to move
       const isBlack = fen.split(' ')[1] === 'b';
       let score;
-      if(data.mate !== null && data.mate !== undefined){
-        // Forced mate: use large sentinel value
+      if(data.mate != null){
         score = (data.mate > 0 ? 30000 : -30000) * (isBlack ? -1 : 1);
       } else {
         const cp = Math.round((data.evaluation ?? 0) * 100);
         score = isBlack ? -cp : cp;
       }
 
-      // bestmove field: "bestmove e2e4 ponder e7e5" — take second token
       let bestMove = null;
       if(data.bestmove){
         const parts = data.bestmove.trim().split(/\s+/);
-        // parts[0] might be "bestmove" or directly the move
         bestMove = (parts[0] === 'bestmove' ? parts[1] : parts[0]) || null;
         if(bestMove === '(none)') bestMove = null;
       }
+      const pv = data.continuation
+        ? data.continuation.trim().split(/\s+/)
+        : (bestMove ? [bestMove] : []);
 
-      // continuation is the PV as a space-separated string
-      const pv = data.continuation ? data.continuation.trim().split(/\s+/) : (bestMove ? [bestMove] : []);
-
-      return { score, bestMove, pv };
-
+      return {score, bestMove, pv};
     } catch(err) {
-      // Network error / timeout — fall through to inline engine for this position
+      // API failed mid-analysis — fall through to inline for this position
       await new Promise(r => setTimeout(r, 0));
       return _inlineAnalyze(fen, Math.min(S.sfDepth, 5));
     }
   }
 
-  stop()     { this._stopped = true; }
-  terminate(){
+  stop() {
     this._stopped = true;
-    this.ready    = false;
-    this._online  = false;
-    this._inline  = false;
+    if(this._worker) this._worker.postMessage('stop');
+  }
+
+  terminate() {
+    this._stopped = true;
+    if(this._worker){
+      this._worker.terminate();
+      if(this._worker._blobUrl) URL.revokeObjectURL(this._worker._blobUrl);
+      this._worker = null;
+    }
+    this.ready   = false;
+    this._online = false;
+    this._inline = false;
+    this._stopped = false;
   }
 }
 
@@ -1687,10 +1776,12 @@ async function analyzeGame(){
       addChatMsg('assistant','⚙️ Loading engine…');
       S.analyzer=new StockfishAnalyzer();
       await S.analyzer.init();
-      if(S.analyzer._online){
+      if(S.analyzer._worker){
+        addChatMsg('assistant','✅ Stockfish 16 NNUE ready (WASM engine).');
+      } else if(S.analyzer._online){
         addChatMsg('assistant','✅ Stockfish 16 NNUE ready (via stockfish.online).');
       } else {
-        addChatMsg('assistant','⚠️ stockfish.online unreachable — using built-in engine (depth capped at 5).');
+        addChatMsg('assistant','⚠️ Running built-in engine (depth capped at 5). For full Stockfish, deploy to GitHub Pages.');
       }
     }catch(e){
       S.analyzer=null;
@@ -1700,9 +1791,11 @@ async function analyzeGame(){
   }
   S.analyzer._stopped=false;
   const _preset = sfPresetForDepth(S.sfDepth);
-  const _engineName = S.analyzer._inline
-    ? `Built-in engine · depth ${Math.min(S.sfDepth,5)}`
-    : `Stockfish 16 NNUE · depth ${Math.min(S.sfDepth,16)}`;
+  const _engineName = S.analyzer._worker
+    ? `Stockfish 16 NNUE · depth ${S.sfDepth}`
+    : S.analyzer._online
+      ? `Stockfish 16 NNUE · depth ${Math.min(S.sfDepth,16)} (online)`
+      : `Built-in engine · depth ${Math.min(S.sfDepth,5)}`;
   document.getElementById('progressLabel').textContent =
     `${_engineName} · ${_preset.label} (${_preset.tag} ELo)…`;
   addChatMsg('assistant',`⚙️ Analyzing ${S.positions.length} positions — ${_engineName} · ${_preset.label} ${_preset.tag} ELo…`);
@@ -1888,8 +1981,15 @@ function buildGameContext(){
       const side=(S.posIndex-1)%2===0?'White':'Black';
       ctx+=`\n- Last move played: \`${mv.san}\` by ${side}`;
       if(mv._class)ctx+=` — classified as **${mv._class}**`;
-      if(mv._bestMove&&mv._class&&mv._class!=='best'&&mv._class!=='excellent')
-        ctx+=`\n- Engine's best move here was: \`${mv._bestMove}\``;
+      if(mv._bestMove){
+        // Only mention the engine's best move when it differs from what was played
+        const sanBase=(mv.san||'').replace(/[+#!?]/g,'').toLowerCase();
+        const bmBase=(mv._bestMove||'').replace(/[+#!?]/g,'').toLowerCase();
+        const isBest=sanBase&&bmBase&&(sanBase===bmBase||bmBase.endsWith(sanBase));
+        if(isBest) ctx+=`\n- This move IS the engine's best move.`;
+        else if(mv._class&&!['best','excellent','good','book'].includes(mv._class))
+          ctx+=`\n- Engine's best move here was: \`${mv._bestMove}\``;
+      }
       if(mv._evalBefore!=null&&mv._evalAfter!=null)
         ctx+=`\n- Evaluation shifted: ${cpToDisplay(mv._evalBefore)} → ${cpToDisplay(mv._evalAfter)}`;
     }else{
@@ -1908,7 +2008,12 @@ function buildGameContext(){
       const postA=S.analysis[i+1];
       const evalStr=analyzed&&postA?` [${cpToDisplay(postA.score)}]`:'';
       const clsStr=m._class&&m._class!=='best'?` (${m._class})`:'';
-      const bmStr=m._bestMove&&m._class&&!['best','excellent','good','book'].includes(m._class)?` {best:${m._bestMove}}`:'';
+      let bmStr='';
+      if(m._bestMove&&m._class&&!['best','excellent','good','book'].includes(m._class)){
+        const sanB=(m.san||'').replace(/[+#!?]/g,'').toLowerCase();
+        const bmB=(m._bestMove||'').replace(/[+#!?]/g,'').toLowerCase();
+        if(!(sanB&&bmB&&(sanB===bmB||bmB.endsWith(sanB)))) bmStr=` {best:${m._bestMove}}`;
+      }
       line+=`${m.san}${clsStr}${evalStr}${bmStr} `;
     });
     ctx+=line;
@@ -2061,7 +2166,13 @@ function buildWorkerContext(){
       classification:mv._class,
       evalBefore:mv._evalBefore,
       evalAfter:mv._evalAfter,
-      bestMove:mv._bestMove,
+      // Suppress bestMove when it matches the played move (avoids LLM hallucinating a difference)
+      bestMove:(()=>{
+        const sanB=(mv.san||'').replace(/[+#!?]/g,'').toLowerCase();
+        const bmB=(mv._bestMove||'').replace(/[+#!?]/g,'').toLowerCase();
+        const same=sanB&&bmB&&(sanB===bmB||bmB.endsWith(sanB));
+        return same ? null : mv._bestMove;
+      })(),
     }:null,
     evalScore:a?.score??null,
     accuracy,blunders,mistakes,
@@ -2272,7 +2383,9 @@ function init(){
   function sfUpdateDepthUI(depth){
     const preset = sfPresetForDepth(depth);
     document.getElementById('sfDepthNum').textContent   = depth;
-    const capNote = depth > 16 ? ` · API caps at 16` : '';
+    // Note: cap only applies when falling back to stockfish.online (no local Worker)
+    const onlineOnly = S.analyzer && S.analyzer._online && !S.analyzer._worker;
+    const capNote = (onlineOnly && depth > 16) ? ` · API caps at 16` : '';
     document.getElementById('sfEloDisplay').textContent = `${preset.label} (${preset.tag} ELo${capNote})`;
     document.getElementById('sfDepthSlider').value      = depth;
     // Highlight matching preset button (exact match only)
