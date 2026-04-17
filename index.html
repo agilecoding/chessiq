@@ -1585,12 +1585,15 @@ class StockfishAnalyzer {
             worker._blobUrl = url;
 
             const t = setTimeout(()=>{ worker.terminate(); reject(new Error('timeout')); }, 15000);
-            const initHandler = ({data}) => {
-              if(data==='uciok'){ worker.postMessage('isready'); }
-              if(data==='readyok'){
+            const initHandler = (e) => {
+              // Stockfish.js may post a plain string or a MessageEvent
+              const line = (typeof e === 'string' ? e : e.data || '').trim();
+              if(line === 'uciok'){ worker.postMessage('isready'); }
+              if(line === 'readyok'){
                 clearTimeout(t);
-                // Remove init handler before handing worker to analyze()
                 worker.removeEventListener('message', initHandler);
+                worker.postMessage('setoption name Hash value 32');
+                worker.postMessage('ucinewgame');
                 resolve(worker);
               }
             };
@@ -1619,21 +1622,31 @@ class StockfishAnalyzer {
     return new Promise(resolve => {
       let score=0, bestMove=null, pv=[];
       const isBlack = fen.split(' ')[1]==='b';
-      const handler = ({data}) => {
-        const cpM = data.match(/\bscore cp (-?\d+)/);
-        const mtM = data.match(/\bscore mate (-?\d+)/);
-        const pvM = data.match(/\bpv (.+)/);
+
+      let guard;
+      const handler = (e) => {
+        const line = (typeof e === 'string' ? e : e.data || '').trim();
+        if(!line) return;
+        const cpM = line.match(/\bscore cp (-?\d+)/);
+        const mtM = line.match(/\bscore mate (-?\d+)/);
+        const pvM = line.match(/\bpv (.+)/);
         if(cpM) score = isBlack ? -parseInt(cpM[1],10) : parseInt(cpM[1],10);
         if(mtM){ const m=parseInt(mtM[1],10); score=(m>0?30000:-30000)*(isBlack?-1:1); }
         if(pvM) pv = pvM[1].trim().split(' ');
-        if(data.startsWith('bestmove')){
-          this._worker.removeEventListener('message',handler);
-          const p=data.split(' ');
-          bestMove=p[1]!=='(none)'?p[1]:null;
-          resolve({score,bestMove,pv});
+        if(line.startsWith('bestmove')){
+          clearTimeout(guard);
+          this._worker.removeEventListener('message', handler);
+          const p = line.split(' ');
+          bestMove = p[1] !== '(none)' ? p[1] : null;
+          resolve({score, bestMove, pv});
         }
       };
-      this._worker.addEventListener('message',handler);
+      // Safety: if bestmove never arrives (e.g. game over position), resolve anyway
+      guard = setTimeout(()=>{
+        this._worker.removeEventListener('message', handler);
+        resolve({score, bestMove, pv});
+      }, 10000);
+      this._worker.addEventListener('message', handler);
       this._worker.postMessage(`position fen ${fen}`);
       this._worker.postMessage(`go depth ${S.sfDepth}`);
     });
