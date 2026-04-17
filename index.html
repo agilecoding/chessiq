@@ -1128,7 +1128,7 @@ function renderBoard(fen, opts = {}) {
 }
 
 // ── Stockfish constants (must precede state) ─────────────────────────────────
-const SF_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
+// SF_CDN removed — engine is now stockfish.online REST API (no local Worker needed)
 
 const SF_DEPTH_PRESETS = [
   { depth:  1, elo:  600, label: 'Beginner',   tag: '~600'  },
@@ -1463,11 +1463,10 @@ function renderMoveList(){
 
 // ── Chess Engine ──────────────────────────────────────────────────────────────
 // Two-tier strategy:
-//   1. Real Stockfish via Web Worker (SF_CDN) — used on GitHub Pages / HTTPS
-//      where Workers are allowed. UCI protocol, depth from S.sfDepth.
-//   2. Inline alpha-beta fallback — activates automatically when Worker
-//      construction is blocked (local files, strict CSP sandboxes).
-//      Iterative deepening + captures-first move ordering, same interface.
+//   1. stockfish.online REST API — Stockfish 16 NNUE, free, no auth required.
+//      Simple fetch() call, works everywhere, depth capped at 16 by the API.
+//   2. Inline alpha-beta fallback — activates when the API is unreachable
+//      (offline, network error). Same interface, depth capped at 5.
 
 // ── Inline fallback engine ────────────────────────────────────────────────────
 const _PV  = {p:100,n:320,b:330,r:500,q:900,k:0};
@@ -1550,121 +1549,100 @@ function _inlineAnalyze(fen, depth){
 }
 
 // ── StockfishAnalyzer: Worker → inline fallback ───────────────────────────────
+// ── Stockfish REST API endpoint ───────────────────────────────────────────────
+// stockfish.online — free, no auth, max depth 16, NNUE-powered Stockfish 16
+const SF_API = 'https://stockfish.online/api/s/v2.php';
+
 class StockfishAnalyzer {
   constructor() {
     this.ready    = false;
     this._stopped = false;
-    this._worker  = null;   // set if real Worker loaded successfully
+    this._online  = false;  // true when stockfish.online is reachable
     this._inline  = false;  // true when falling back to inline engine
   }
 
   async init() {
-    // Try real Stockfish Worker first
+    // Probe stockfish.online with a quick test position (startpos, depth 1)
     try {
-      this._worker = await this._tryWorker();
-      this.ready   = true;
-      this._inline = false;
+      const testFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+      const url = `${SF_API}?fen=${encodeURIComponent(testFen)}&depth=1`;
+      const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const data = await res.json();
+      if(data.success){
+        this._online = true;
+        this._inline = false;
+        this.ready   = true;
+        return;
+      }
+      throw new Error('API returned success:false');
     } catch(_) {
-      // Worker blocked — use inline engine
-      this._worker = null;
+      // stockfish.online unreachable — fall back to inline engine
+      this._online = false;
       this._inline = true;
       this.ready   = true;
     }
   }
 
-  _tryWorker() {
-    return new Promise((resolve, reject) => {
-      let worker;
-      try {
-        // Fetch engine text, embed in blob so no cross-origin Worker issue
-        fetch(SF_CDN)
-          .then(r => { if(!r.ok) throw new Error(); return r.text(); })
-          .then(src => {
-            const url = URL.createObjectURL(new Blob([src],{type:'application/javascript'}));
-            worker = new Worker(url);
-            worker._blobUrl = url;
+  async analyze(fen) {
+    if(this._stopped) return {score:0, bestMove:null, pv:[]};
 
-            const t = setTimeout(()=>{ worker.terminate(); reject(new Error('timeout')); }, 15000);
-            const initHandler = (e) => {
-              // Stockfish.js may post a plain string or a MessageEvent
-              const line = (typeof e === 'string' ? e : e.data || '').trim();
-              if(line === 'uciok'){ worker.postMessage('isready'); }
-              if(line === 'readyok'){
-                clearTimeout(t);
-                worker.removeEventListener('message', initHandler);
-                worker.postMessage('setoption name Hash value 32');
-                worker.postMessage('ucinewgame');
-                resolve(worker);
-              }
-            };
-            worker.addEventListener('message', initHandler);
-            worker.onerror = ()=>{ clearTimeout(t); reject(new Error('worker error')); };
-            worker.postMessage('uci');
-          })
-          .catch(reject);
-      } catch(e){ reject(e); }
-    });
-  }
-
-  analyze(fen) {
-    if(this._stopped) return Promise.resolve({score:0,bestMove:null,pv:[]});
-
+    // ── Inline fallback (offline / API down) ──────────────────────────────────
     if(this._inline){
-      // Inline: yield to UI, then run synchronously
       return new Promise(resolve => setTimeout(()=>{
-        // Cap inline depth: >5 is slow on main thread
-        const depth = Math.min(S.sfDepth, 5);
-        resolve(_inlineAnalyze(fen, depth));
+        resolve(_inlineAnalyze(fen, Math.min(S.sfDepth, 5)));
       }, 0));
     }
 
-    // Worker path — full UCI depth
-    return new Promise(resolve => {
-      let score=0, bestMove=null, pv=[];
-      const isBlack = fen.split(' ')[1]==='b';
+    // ── stockfish.online REST API (Stockfish 16 NNUE) ─────────────────────────
+    // API max depth is 16; clamp user selection accordingly
+    const depth = Math.min(S.sfDepth, 16);
+    const url   = `${SF_API}?fen=${encodeURIComponent(fen)}&depth=${depth}`;
 
-      let guard;
-      const handler = (e) => {
-        const line = (typeof e === 'string' ? e : e.data || '').trim();
-        if(!line) return;
-        const cpM = line.match(/\bscore cp (-?\d+)/);
-        const mtM = line.match(/\bscore mate (-?\d+)/);
-        const pvM = line.match(/\bpv (.+)/);
-        if(cpM) score = isBlack ? -parseInt(cpM[1],10) : parseInt(cpM[1],10);
-        if(mtM){ const m=parseInt(mtM[1],10); score=(m>0?30000:-30000)*(isBlack?-1:1); }
-        if(pvM) pv = pvM[1].trim().split(' ');
-        if(line.startsWith('bestmove')){
-          clearTimeout(guard);
-          this._worker.removeEventListener('message', handler);
-          const p = line.split(' ');
-          bestMove = p[1] !== '(none)' ? p[1] : null;
-          resolve({score, bestMove, pv});
-        }
-      };
-      // Safety: if bestmove never arrives (e.g. game over position), resolve anyway
-      guard = setTimeout(()=>{
-        this._worker.removeEventListener('message', handler);
-        resolve({score, bestMove, pv});
-      }, 10000);
-      this._worker.addEventListener('message', handler);
-      this._worker.postMessage(`position fen ${fen}`);
-      this._worker.postMessage(`go depth ${S.sfDepth}`);
-    });
-  }
+    try {
+      const res  = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
 
-  stop(){
-    this._stopped=true;
-    if(this._worker) this._worker.postMessage('stop');
-  }
+      if(!data.success) throw new Error('API error');
 
-  terminate(){
-    this.stop();
-    if(this._worker){
-      this._worker.terminate();
-      if(this._worker._blobUrl) URL.revokeObjectURL(this._worker._blobUrl);
-      this._worker=null;
+      // evaluation is in pawns (e.g. 0.45); convert to centipawns
+      // Always white-relative from the API — negate for black to move
+      const isBlack = fen.split(' ')[1] === 'b';
+      let score;
+      if(data.mate !== null && data.mate !== undefined){
+        // Forced mate: use large sentinel value
+        score = (data.mate > 0 ? 30000 : -30000) * (isBlack ? -1 : 1);
+      } else {
+        const cp = Math.round((data.evaluation ?? 0) * 100);
+        score = isBlack ? -cp : cp;
+      }
+
+      // bestmove field: "bestmove e2e4 ponder e7e5" — take second token
+      let bestMove = null;
+      if(data.bestmove){
+        const parts = data.bestmove.trim().split(/\s+/);
+        // parts[0] might be "bestmove" or directly the move
+        bestMove = (parts[0] === 'bestmove' ? parts[1] : parts[0]) || null;
+        if(bestMove === '(none)') bestMove = null;
+      }
+
+      // continuation is the PV as a space-separated string
+      const pv = data.continuation ? data.continuation.trim().split(/\s+/) : (bestMove ? [bestMove] : []);
+
+      return { score, bestMove, pv };
+
+    } catch(err) {
+      // Network error / timeout — fall through to inline engine for this position
+      return _inlineAnalyze(fen, Math.min(S.sfDepth, 5));
     }
-    this.ready=false; this._stopped=false; this._inline=false;
+  }
+
+  stop()     { this._stopped = true; }
+  terminate(){
+    this._stopped = true;
+    this.ready    = false;
+    this._online  = false;
+    this._inline  = false;
   }
 }
 
@@ -1680,10 +1658,10 @@ async function analyzeGame(){
       addChatMsg('assistant','⚙️ Loading engine…');
       S.analyzer=new StockfishAnalyzer();
       await S.analyzer.init();
-      if(S.analyzer._inline){
-        addChatMsg('assistant','⚠️ Stockfish Worker blocked in this environment — using built-in engine (depth capped at 5). Deploy to GitHub Pages for full Stockfish.');
+      if(S.analyzer._online){
+        addChatMsg('assistant','✅ Stockfish 16 NNUE ready (via stockfish.online).');
       } else {
-        addChatMsg('assistant','✅ Stockfish loaded.');
+        addChatMsg('assistant','⚠️ stockfish.online unreachable — using built-in engine (depth capped at 5).');
       }
     }catch(e){
       S.analyzer=null;
@@ -1693,7 +1671,9 @@ async function analyzeGame(){
   }
   S.analyzer._stopped=false;
   const _preset = sfPresetForDepth(S.sfDepth);
-  const _engineName = S.analyzer._inline ? `Built-in engine · depth ${Math.min(S.sfDepth,5)}` : `Stockfish · depth ${S.sfDepth}`;
+  const _engineName = S.analyzer._inline
+    ? `Built-in engine · depth ${Math.min(S.sfDepth,5)}`
+    : `Stockfish 16 NNUE · depth ${Math.min(S.sfDepth,16)}`;
   document.getElementById('progressLabel').textContent =
     `${_engineName} · ${_preset.label} (${_preset.tag} ELo)…`;
   addChatMsg('assistant',`⚙️ Analyzing ${S.positions.length} positions — ${_engineName} · ${_preset.label} ${_preset.tag} ELo…`);
@@ -2268,7 +2248,8 @@ function init(){
   function sfUpdateDepthUI(depth){
     const preset = sfPresetForDepth(depth);
     document.getElementById('sfDepthNum').textContent   = depth;
-    document.getElementById('sfEloDisplay').textContent = `${preset.label} (${preset.tag} ELo)`;
+    const capNote = depth > 16 ? ` · API caps at 16` : '';
+    document.getElementById('sfEloDisplay').textContent = `${preset.label} (${preset.tag} ELo${capNote})`;
     document.getElementById('sfDepthSlider').value      = depth;
     // Highlight matching preset button (exact match only)
     document.querySelectorAll('.sf-preset').forEach(btn=>{
