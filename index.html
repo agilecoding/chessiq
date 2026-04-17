@@ -550,6 +550,40 @@ header .spacer{flex:1;}
 .s-input:focus{border-color:var(--accent);}
 .s-inline{display:flex;align-items:center;gap:10px;}
 .depth-val{font-family:'JetBrains Mono',monospace;font-size:.85rem;font-weight:700;min-width:20px;color:var(--cyan);}
+/* ── Depth slider ── */
+.sf-depth-wrap{display:flex;flex-direction:column;gap:8px;}
+.sf-depth-track{display:flex;align-items:center;gap:10px;}
+.sf-depth-track input[type=range]{
+  flex:1;height:4px;
+  -webkit-appearance:none;appearance:none;
+  background:var(--border);border-radius:4px;outline:none;cursor:pointer;
+}
+.sf-depth-track input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:16px;height:16px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--bg);cursor:pointer;
+}
+.sf-depth-track input[type=range]::-moz-range-thumb{
+  width:16px;height:16px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--bg);cursor:pointer;
+}
+.sf-depth-num{font-family:'JetBrains Mono',monospace;font-size:.9rem;font-weight:700;color:var(--cyan);min-width:26px;text-align:right;}
+.sf-preset-row{display:flex;gap:5px;flex-wrap:wrap;}
+.sf-preset{
+  flex:1;min-width:70px;padding:5px 4px;border-radius:6px;
+  border:1px solid var(--border);background:var(--card);
+  cursor:pointer;text-align:center;transition:all .12s;
+}
+.sf-preset:hover{border-color:var(--accent);background:#2a2755;}
+.sf-preset.active{border-color:var(--cyan);background:#1a2a3a;}
+.sf-preset-name{display:block;font-size:.63rem;font-weight:700;color:var(--text);line-height:1.3;}
+.sf-preset-elo{display:block;font-size:.6rem;color:var(--muted);}
+.sf-elo-badge{
+  display:inline-block;padding:3px 8px;border-radius:10px;
+  background:#1a2a1a;border:1px solid var(--green);
+  font-size:.7rem;font-weight:700;color:var(--green);
+  font-family:'JetBrains Mono',monospace;
+}
 input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
 /* ── Provider selector ── */
 .provider-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
@@ -731,7 +765,7 @@ input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
 
       <!-- Analysis progress (reserved space, no layout jump) -->
       <div class="analysis-progress" id="analysisProgress">
-        <div class="prog-label"><span>Analyzing with Stockfish…</span><span id="progressPct">0%</span></div>
+        <div class="prog-label"><span id="progressLabel">Stockfish…</span><span id="progressPct">0%</span></div>
         <div class="prog-track"><div class="prog-fill" id="progressFill"></div></div>
       </div>
 
@@ -895,6 +929,18 @@ input[type="range"]{flex:1;accent-color:var(--accent);cursor:pointer;}
         <span class="s-label" id="apiKeyLabel">API Key</span>
         <span class="s-desc" id="apiKeyDesc">Enter your API key for the selected provider.</span>
         <input type="password" class="s-input" id="apiKeyInput" placeholder="…">
+      </div>
+      <!-- Stockfish depth row -->
+      <div class="s-row">
+        <span class="s-label">Stockfish Analysis Depth</span>
+        <span class="s-desc">Higher depth = stronger analysis &amp; slower. <strong id="sfEloDisplay" style="color:var(--green)">Expert (~2000 ELo)</strong></span>
+        <div class="sf-depth-wrap">
+          <div class="sf-depth-track">
+            <input type="range" id="sfDepthSlider" min="1" max="22" step="1" value="12">
+            <span class="sf-depth-num" id="sfDepthNum">12</span>
+          </div>
+          <div class="sf-preset-row" id="sfPresetRow"></div>
+        </div>
       </div>
     </div>
     <div class="modal-actions">
@@ -1081,12 +1127,28 @@ function renderBoard(fen, opts = {}) {
   }
 }
 
+// ── Stockfish constants (must precede state) ─────────────────────────────────
+const SF_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
+
+const SF_DEPTH_PRESETS = [
+  { depth:  1, elo:  600, label: 'Beginner',   tag: '~600'  },
+  { depth:  3, elo:  900, label: 'Casual',      tag: '~900'  },
+  { depth:  5, elo: 1200, label: 'Club player', tag: '~1200' },
+  { depth:  8, elo: 1600, label: 'Advanced',    tag: '~1600' },
+  { depth: 12, elo: 2000, label: 'Expert',      tag: '~2000' }, // ← default
+  { depth: 15, elo: 2200, label: 'Master',      tag: '~2200' },
+  { depth: 18, elo: 2400, label: 'Grandmaster', tag: '~2400' },
+  { depth: 22, elo: 2700, label: 'Super-GM',    tag: '~2700' },
+];
+const SF_DEFAULT_DEPTH = 12; // Expert — accurate enough, fast on most machines
+
 // ── State ────────────────────────────────────────────────────────────────────
 const S={
   flipped:false,positions:[],moves:[],analysis:[],
   posIndex:0,isAnalyzing:false,autoPlayTimer:null,
   boardSize:420,pgn:'',headers:{},
   apiKey:'',aiProvider:'worker',workerUrl:'',
+  sfDepth:SF_DEFAULT_DEPTH,
   chatHistory:[],evalChart:null,analyzer:null,
 };
 
@@ -1399,132 +1461,229 @@ function renderMoveList(){
   }
 }
 
-// ── Inline Chess Engine (alpha-beta, uses chess.js already on page) ───────────
-// Piece values + piece-square tables (white's perspective, row 0 = rank 8)
-const _PV={p:100,n:320,b:330,r:500,q:900,k:0};
-const _PST={
-  p:[  0,  0,  0,  0,  0,  0,  0,  0,
-      50, 50, 50, 50, 50, 50, 50, 50,
-      10, 10, 20, 30, 30, 20, 10, 10,
-       5,  5, 10, 25, 25, 10,  5,  5,
-       0,  0,  0, 20, 20,  0,  0,  0,
-       5, -5,-10,  0,  0,-10, -5,  5,
-       5, 10, 10,-20,-20, 10, 10,  5,
-       0,  0,  0,  0,  0,  0,  0,  0],
-  n:[-50,-40,-30,-30,-30,-30,-40,-50,
-     -40,-20,  0,  0,  0,  0,-20,-40,
-     -30,  0, 10, 15, 15, 10,  0,-30,
-     -30,  5, 15, 20, 20, 15,  5,-30,
-     -30,  0, 15, 20, 20, 15,  0,-30,
-     -30,  5, 10, 15, 15, 10,  5,-30,
-     -40,-20,  0,  5,  5,  0,-20,-40,
-     -50,-40,-30,-30,-30,-30,-40,-50],
-  b:[-20,-10,-10,-10,-10,-10,-10,-20,
-     -10,  0,  0,  0,  0,  0,  0,-10,
-     -10,  0,  5, 10, 10,  5,  0,-10,
-     -10,  5,  5, 10, 10,  5,  5,-10,
-     -10,  0, 10, 10, 10, 10,  0,-10,
-     -10, 10, 10, 10, 10, 10, 10,-10,
-     -10,  5,  0,  0,  0,  0,  5,-10,
-     -20,-10,-10,-10,-10,-10,-10,-20],
-  r:[  0,  0,  0,  0,  0,  0,  0,  0,
-       5, 10, 10, 10, 10, 10, 10,  5,
-      -5,  0,  0,  0,  0,  0,  0, -5,
-      -5,  0,  0,  0,  0,  0,  0, -5,
-      -5,  0,  0,  0,  0,  0,  0, -5,
-      -5,  0,  0,  0,  0,  0,  0, -5,
-      -5,  0,  0,  0,  0,  0,  0, -5,
-       0,  0,  0,  5,  5,  0,  0,  0],
-  q:[-20,-10,-10, -5, -5,-10,-10,-20,
-     -10,  0,  0,  0,  0,  0,  0,-10,
-     -10,  0,  5,  5,  5,  5,  0,-10,
-      -5,  0,  5,  5,  5,  5,  0, -5,
-       0,  0,  5,  5,  5,  5,  0, -5,
-     -10,  5,  5,  5,  5,  5,  0,-10,
-     -10,  0,  5,  0,  0,  0,  0,-10,
-     -20,-10,-10, -5, -5,-10,-10,-20],
-  k:[-30,-40,-40,-50,-50,-40,-40,-30,
-     -30,-40,-40,-50,-50,-40,-40,-30,
-     -30,-40,-40,-50,-50,-40,-40,-30,
-     -30,-40,-40,-50,-50,-40,-40,-30,
-     -20,-30,-30,-40,-40,-30,-30,-20,
-     -10,-20,-20,-20,-20,-20,-20,-10,
-      20, 20,  0,  0,  0,  0, 20, 20,
-      20, 30, 10,  0,  0, 10, 30, 20]
+// ── Chess Engine ──────────────────────────────────────────────────────────────
+// Two-tier strategy:
+//   1. Real Stockfish via Web Worker (SF_CDN) — used on GitHub Pages / HTTPS
+//      where Workers are allowed. UCI protocol, depth from S.sfDepth.
+//   2. Inline alpha-beta fallback — activates automatically when Worker
+//      construction is blocked (local files, strict CSP sandboxes).
+//      Iterative deepening + captures-first move ordering, same interface.
+
+// ── Inline fallback engine ────────────────────────────────────────────────────
+const _PV  = {p:100,n:320,b:330,r:500,q:900,k:0};
+const _PST = {
+  p:[  0,  0,  0,  0,  0,  0,  0,  0, 50,50,50,50,50,50,50,50,
+      10,10,20,30,30,20,10,10,  5, 5,10,25,25,10, 5, 5,
+       0,  0,  0,20,20,  0,  0,  0,  5,-5,-10, 0, 0,-10,-5, 5,
+       5,10,10,-20,-20,10,10,  5,  0, 0, 0, 0, 0, 0, 0, 0],
+  n:[-50,-40,-30,-30,-30,-30,-40,-50,-40,-20,0,0,0,0,-20,-40,
+     -30,0,10,15,15,10,0,-30,-30,5,15,20,20,15,5,-30,
+     -30,0,15,20,20,15,0,-30,-30,5,10,15,15,10,5,-30,
+     -40,-20,0,5,5,0,-20,-40,-50,-40,-30,-30,-30,-30,-40,-50],
+  b:[-20,-10,-10,-10,-10,-10,-10,-20,-10,0,0,0,0,0,0,-10,
+     -10,0,5,10,10,5,0,-10,-10,5,5,10,10,5,5,-10,
+     -10,0,10,10,10,10,0,-10,-10,10,10,10,10,10,10,-10,
+     -10,5,0,0,0,0,5,-10,-20,-10,-10,-10,-10,-10,-10,-20],
+  r:[0,0,0,0,0,0,0,0,5,10,10,10,10,10,10,5,
+     -5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,
+     -5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,
+     -5,0,0,0,0,0,0,-5,0,0,0,5,5,0,0,0],
+  q:[-20,-10,-10,-5,-5,-10,-10,-20,-10,0,0,0,0,0,0,-10,
+     -10,0,5,5,5,5,0,-10,-5,0,5,5,5,5,0,-5,
+      0,0,5,5,5,5,0,-5,-10,5,5,5,5,5,0,-10,
+     -10,0,5,0,0,0,0,-10,-20,-10,-10,-5,-5,-10,-10,-20],
+  k:[-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,
+     -30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,
+     -20,-30,-30,-40,-40,-30,-30,-20,-10,-20,-20,-20,-20,-20,-20,-10,
+      20,20,0,0,0,0,20,20,20,30,10,0,0,10,30,20]
 };
 function _evalBoard(chess){
   let s=0;
   chess.board().forEach((row,r)=>row.forEach((pc,f)=>{
     if(!pc)return;
-    const t=pc.type,w=pc.color==='w';
+    const w=pc.color==='w', t=pc.type;
     const idx=w?r*8+f:(7-r)*8+f;
     s+=w?(_PV[t]+(_PST[t]?.[idx]||0)):-(_PV[t]+(_PST[t]?.[idx]||0));
   }));
   return s;
 }
+function _mvScore(m){ // move ordering: captures > promotions > quiet
+  let s=0;
+  if(m.captured) s+=10*_PV[m.captured]-_PV[m.piece];
+  if(m.promotion) s+=_PV[m.promotion];
+  return s;
+}
 function _ab(chess,depth,alpha,beta,maxing){
-  if(chess.game_over())return chess.in_checkmate()?(maxing?-29000:29000):0;
-  if(depth===0)return _evalBoard(chess);
-  // Move ordering: captures first (improves alpha-beta pruning)
-  const moves=chess.moves({verbose:true}).sort((a,b)=>(b.captured?1:0)-(a.captured?1:0));
+  if(chess.game_over()) return chess.in_checkmate()?(maxing?-29000:29000):0;
+  if(depth===0) return _evalBoard(chess);
+  const moves=chess.moves({verbose:true}).sort((a,b)=>_mvScore(b)-_mvScore(a));
   if(maxing){
     let v=-Infinity;
     for(const m of moves){
-      chess.move(m);v=Math.max(v,_ab(chess,depth-1,alpha,beta,false));chess.undo();
-      alpha=Math.max(alpha,v);if(beta<=alpha)break;
+      chess.move(m); v=Math.max(v,_ab(chess,depth-1,alpha,beta,false)); chess.undo();
+      alpha=Math.max(alpha,v); if(beta<=alpha) break;
     }
     return v;
-  }else{
+  } else {
     let v=Infinity;
     for(const m of moves){
-      chess.move(m);v=Math.min(v,_ab(chess,depth-1,alpha,beta,true));chess.undo();
-      beta=Math.min(beta,v);if(beta<=alpha)break;
+      chess.move(m); v=Math.min(v,_ab(chess,depth-1,alpha,beta,true)); chess.undo();
+      beta=Math.min(beta,v); if(beta<=alpha) break;
     }
     return v;
   }
 }
-
-class StockfishAnalyzer{
-  constructor(){this.ready=false;this._stopped=false;}
-  async init(){this.ready=true;} // instant — engine is inline JS
-  async analyze(fen){
-    if(this._stopped)return{score:0,bestMove:null,pv:[]};
-    // Yield briefly so the progress bar and UI can update between positions
-    await new Promise(r=>setTimeout(r,0));
-    const chess=new Chess(fen);
-    if(chess.game_over())return{score:_evalBoard(chess),bestMove:null,pv:[]};
-    const moves=chess.moves({verbose:true}).sort((a,b)=>(b.captured?1:0)-(a.captured?1:0));
-    const white=chess.turn()==='w';
-    let bestScore=white?-Infinity:Infinity,bestMove=null;
-    for(const m of moves){
-      chess.move(m);
-      // Depth 2 inner search → 3-ply total (fast: <100 ms per position)
-      const score=_ab(chess,2,-Infinity,Infinity,!white);
-      chess.undo();
-      if(white?score>bestScore:score<bestScore){bestScore=score;bestMove=m;}
-    }
-    const uci=bestMove?bestMove.from+bestMove.to+(bestMove.promotion||''):null;
-    // Return score from current player's perspective (analyzeGame normalises to white)
-    return{score:white?bestScore:-bestScore,bestMove:uci,pv:uci?[uci]:[]};
+function _inlineAnalyze(fen, depth){
+  const chess=new Chess(fen);
+  if(chess.game_over()) return {score:_evalBoard(chess),bestMove:null,pv:[]};
+  const white=chess.turn()==='w';
+  const moves=chess.moves({verbose:true}).sort((a,b)=>_mvScore(b)-_mvScore(a));
+  let best=white?-Infinity:Infinity, bestMove=null;
+  for(const m of moves){
+    chess.move(m);
+    const score=_ab(chess, Math.max(1,depth-1), -Infinity, Infinity, !white);
+    chess.undo();
+    if(white?score>best:score<best){ best=score; bestMove=m; }
   }
-  stop(){this._stopped=true;}
+  const uci=bestMove?bestMove.from+bestMove.to+(bestMove.promotion||''):null;
+  return {score:white?best:-best, bestMove:uci, pv:uci?[uci]:[]};
+}
+
+// ── StockfishAnalyzer: Worker → inline fallback ───────────────────────────────
+class StockfishAnalyzer {
+  constructor() {
+    this.ready    = false;
+    this._stopped = false;
+    this._worker  = null;   // set if real Worker loaded successfully
+    this._inline  = false;  // true when falling back to inline engine
+  }
+
+  async init() {
+    // Try real Stockfish Worker first
+    try {
+      this._worker = await this._tryWorker();
+      this.ready   = true;
+      this._inline = false;
+    } catch(_) {
+      // Worker blocked — use inline engine
+      this._worker = null;
+      this._inline = true;
+      this.ready   = true;
+    }
+  }
+
+  _tryWorker() {
+    return new Promise((resolve, reject) => {
+      let worker;
+      try {
+        // Fetch engine text, embed in blob so no cross-origin Worker issue
+        fetch(SF_CDN)
+          .then(r => { if(!r.ok) throw new Error(); return r.text(); })
+          .then(src => {
+            const url = URL.createObjectURL(new Blob([src],{type:'application/javascript'}));
+            worker = new Worker(url);
+            worker._blobUrl = url;
+
+            const t = setTimeout(()=>{ worker.terminate(); reject(new Error('timeout')); }, 15000);
+            const initHandler = ({data}) => {
+              if(data==='uciok'){ worker.postMessage('isready'); }
+              if(data==='readyok'){
+                clearTimeout(t);
+                // Remove init handler before handing worker to analyze()
+                worker.removeEventListener('message', initHandler);
+                resolve(worker);
+              }
+            };
+            worker.addEventListener('message', initHandler);
+            worker.onerror = ()=>{ clearTimeout(t); reject(new Error('worker error')); };
+            worker.postMessage('uci');
+          })
+          .catch(reject);
+      } catch(e){ reject(e); }
+    });
+  }
+
+  analyze(fen) {
+    if(this._stopped) return Promise.resolve({score:0,bestMove:null,pv:[]});
+
+    if(this._inline){
+      // Inline: yield to UI, then run synchronously
+      return new Promise(resolve => setTimeout(()=>{
+        // Cap inline depth: >5 is slow on main thread
+        const depth = Math.min(S.sfDepth, 5);
+        resolve(_inlineAnalyze(fen, depth));
+      }, 0));
+    }
+
+    // Worker path — full UCI depth
+    return new Promise(resolve => {
+      let score=0, bestMove=null, pv=[];
+      const isBlack = fen.split(' ')[1]==='b';
+      const handler = ({data}) => {
+        const cpM = data.match(/\bscore cp (-?\d+)/);
+        const mtM = data.match(/\bscore mate (-?\d+)/);
+        const pvM = data.match(/\bpv (.+)/);
+        if(cpM) score = isBlack ? -parseInt(cpM[1],10) : parseInt(cpM[1],10);
+        if(mtM){ const m=parseInt(mtM[1],10); score=(m>0?30000:-30000)*(isBlack?-1:1); }
+        if(pvM) pv = pvM[1].trim().split(' ');
+        if(data.startsWith('bestmove')){
+          this._worker.removeEventListener('message',handler);
+          const p=data.split(' ');
+          bestMove=p[1]!=='(none)'?p[1]:null;
+          resolve({score,bestMove,pv});
+        }
+      };
+      this._worker.addEventListener('message',handler);
+      this._worker.postMessage(`position fen ${fen}`);
+      this._worker.postMessage(`go depth ${S.sfDepth}`);
+    });
+  }
+
+  stop(){
+    this._stopped=true;
+    if(this._worker) this._worker.postMessage('stop');
+  }
+
+  terminate(){
+    this.stop();
+    if(this._worker){
+      this._worker.terminate();
+      if(this._worker._blobUrl) URL.revokeObjectURL(this._worker._blobUrl);
+      this._worker=null;
+    }
+    this.ready=false; this._stopped=false; this._inline=false;
+  }
 }
 
 // ── Analyze Game ─────────────────────────────────────────────────────────────
 async function analyzeGame(){
   if(S.isAnalyzing||!S.positions.length)return;
+
+  // Re-create the analyzer if it hasn't been initialised yet, or was terminated
   if(!S.analyzer||!S.analyzer.ready){
+    // Terminate any old worker cleanly before creating a new one
+    if(S.analyzer) S.analyzer.terminate();
     try{
+      addChatMsg('assistant','⚙️ Loading engine…');
       S.analyzer=new StockfishAnalyzer();
       await S.analyzer.init();
-      addChatMsg('assistant','⚙️ Analyzing game…');
+      if(S.analyzer._inline){
+        addChatMsg('assistant','⚠️ Stockfish Worker blocked in this environment — using built-in engine (depth capped at 5). Deploy to GitHub Pages for full Stockfish.');
+      } else {
+        addChatMsg('assistant','✅ Stockfish loaded.');
+      }
     }catch(e){
       S.analyzer=null;
-      addChatMsg('assistant','❌ '+e.message);
+      addChatMsg('assistant','❌ Engine error: '+e.message);
       return;
     }
   }
   S.analyzer._stopped=false;
+  const _preset = sfPresetForDepth(S.sfDepth);
+  const _engineName = S.analyzer._inline ? `Built-in engine · depth ${Math.min(S.sfDepth,5)}` : `Stockfish · depth ${S.sfDepth}`;
+  document.getElementById('progressLabel').textContent =
+    `${_engineName} · ${_preset.label} (${_preset.tag} ELo)…`;
+  addChatMsg('assistant',`⚙️ Analyzing ${S.positions.length} positions — ${_engineName} · ${_preset.label} ${_preset.tag} ELo…`);
   S.isAnalyzing=true;S.analysis=new Array(S.positions.length).fill(null);
   document.getElementById('analysisProgress').classList.add('visible');
   document.getElementById('btnAnalyze').disabled=true;
@@ -1563,7 +1722,9 @@ async function analyzeGame(){
   const wBlunders=S.moves.filter((m,i)=>i%2===0&&m._class==='blunder').length;
   const bBlunders=S.moves.filter((m,i)=>i%2===1&&m._class==='blunder').length;
   const keyBlunders=S.moves.filter(m=>m._class==='blunder'||m._class==='mistake').slice(0,3);
-  let msg=`📊 **Analysis Complete!** ${S.moves.length} moves analyzed.\n\n`;
+  const _donePreset  = sfPresetForDepth(S.sfDepth);
+  const _doneEngine  = S.analyzer?._inline ? `Built-in engine depth ${Math.min(S.sfDepth,5)}` : `Stockfish depth ${S.sfDepth}`;
+  let msg=`📊 **Analysis Complete!** ${S.moves.length} moves · ${_doneEngine} · ${_donePreset.label} (${_donePreset.tag} ELo).\n\n`;
   msg+=`**White** accuracy: ${wAcc}% (${wBlunders} blunder${wBlunders!==1?'s':''})\n`;
   msg+=`**Black** accuracy: ${bAcc}% (${bBlunders} blunder${bBlunders!==1?'s':''})\n\n`;
   if(keyBlunders.length){
@@ -2084,6 +2245,43 @@ function init(){
     document.querySelector('.modal-tab[data-mtab="sample"]').click();
     openModal('pgnModal');
   });
+  // ── Depth slider helpers ──────────────────────────────────────────────────
+  function sfPresetForDepth(depth){
+    // Walk backwards to find the last preset whose depth <= current depth
+    let match = SF_DEPTH_PRESETS[0];
+    for(const p of SF_DEPTH_PRESETS){ if(p.depth<=depth) match=p; }
+    return match;
+  }
+  function sfUpdateDepthUI(depth){
+    const preset = sfPresetForDepth(depth);
+    document.getElementById('sfDepthNum').textContent   = depth;
+    document.getElementById('sfEloDisplay').textContent = `${preset.label} (${preset.tag} ELo)`;
+    document.getElementById('sfDepthSlider').value      = depth;
+    // Highlight matching preset button (exact match only)
+    document.querySelectorAll('.sf-preset').forEach(btn=>{
+      btn.classList.toggle('active', parseInt(btn.dataset.depth,10)===depth);
+    });
+  }
+  function sfBuildPresets(){
+    const row = document.getElementById('sfPresetRow');
+    row.innerHTML = '';
+    SF_DEPTH_PRESETS.forEach(p=>{
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sf-preset' + (p.depth===S.sfDepth?' active':'');
+      btn.dataset.depth = p.depth;
+      btn.innerHTML = `<span class="sf-preset-name">${p.label}</span><span class="sf-preset-elo">${p.tag}</span>`;
+      btn.addEventListener('click',()=>{
+        sfUpdateDepthUI(p.depth);
+      });
+      row.appendChild(btn);
+    });
+  }
+  // Slider live update
+  document.getElementById('sfDepthSlider').addEventListener('input', function(){
+    sfUpdateDepthUI(parseInt(this.value,10));
+  });
+
   document.getElementById('settingsBtn').addEventListener('click',()=>{
     document.getElementById('apiKeyInput').value=S.apiKey;
     document.getElementById('workerUrlInput').value=S.workerUrl||'';
@@ -2093,6 +2291,9 @@ function init(){
     });
     updateProviderUI(S.aiProvider);
     applyProviderRestrictions();
+    // Populate depth UI from current state
+    sfBuildPresets();
+    sfUpdateDepthUI(S.sfDepth);
     openModal('settingsModal');
   });
 
@@ -2222,6 +2423,12 @@ function init(){
     S.aiProvider=activeCard?activeCard.dataset.provider:'worker';
     S.apiKey=document.getElementById('apiKeyInput').value.trim();
     S.workerUrl=document.getElementById('workerUrlInput').value.trim();
+    // Depth — if changed, terminate existing engine so it re-inits at new depth
+    const newDepth = parseInt(document.getElementById('sfDepthSlider').value, 10);
+    if(newDepth !== S.sfDepth){
+      S.sfDepth = newDepth;
+      if(S.analyzer){ S.analyzer.terminate(); S.analyzer=null; }
+    }
     // Update badge — opacity controlled by CSS (.api-badge / .connected / .error)
     const badge=document.getElementById('apiBadge');
     const providerLabels={worker:'☁️ Worker',groq:'⚡ Groq',openai:'⬡ OpenAI'};
