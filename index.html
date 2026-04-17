@@ -1142,6 +1142,12 @@ const SF_DEPTH_PRESETS = [
 ];
 const SF_DEFAULT_DEPTH = 12; // Expert — accurate enough, fast on most machines
 
+function sfPresetForDepth(depth){
+  let match = SF_DEPTH_PRESETS[0];
+  for(const p of SF_DEPTH_PRESETS){ if(p.depth<=depth) match=p; }
+  return match;
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 const S={
   flipped:false,positions:[],moves:[],analysis:[],
@@ -2262,12 +2268,7 @@ function init(){
     openModal('pgnModal');
   });
   // ── Depth slider helpers ──────────────────────────────────────────────────
-  function sfPresetForDepth(depth){
-    // Walk backwards to find the last preset whose depth <= current depth
-    let match = SF_DEPTH_PRESETS[0];
-    for(const p of SF_DEPTH_PRESETS){ if(p.depth<=depth) match=p; }
-    return match;
-  }
+  // sfPresetForDepth() is global — defined near SF_DEFAULT_DEPTH above
   function sfUpdateDepthUI(depth){
     const preset = sfPresetForDepth(depth);
     document.getElementById('sfDepthNum').textContent   = depth;
